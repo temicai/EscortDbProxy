@@ -5,6 +5,8 @@ VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EscortDbProxy", "EscortDbProxy\EscortDbProxy.vcxproj", "{C0452F6B-4A4A-45FF-A9B5-7FB50AF0247E}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "testEscortDbProxy", "testEscortDbProxy\testEscortDbProxy.vcxproj", "{575796FB-D360-48EF-8FE1-36D1DF95E227}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -21,6 +23,14 @@ Global
 		{C0452F6B-4A4A-45FF-A9B5-7FB50AF0247E}.Release|x64.Build.0 = Release|x64
 		{C0452F6B-4A4A-45FF-A9B5-7FB50AF0247E}.Release|x86.ActiveCfg = Release|Win32
 		{C0452F6B-4A4A-45FF-A9B5-7FB50AF0247E}.Release|x86.Build.0 = Release|Win32
+		{575796FB-D360-48EF-8FE1-36D1DF95E227}.Debug|x64.ActiveCfg = Debug|x64
+		{575796FB-D360-48EF-8FE1-36D1DF95E227}.Debug|x64.Build.0 = Debug|x64
+		{575796FB-D360-48EF-8FE1-36D1DF95E227}.Debug|x86.ActiveCfg = Debug|Win32
+		{575796FB-D360-48EF-8FE1-36D1DF95E227}.Debug|x86.Build.0 = Debug|Win32
+		{575796FB-D360-48EF-8FE1-36D1DF95E227}.Release|x64.ActiveCfg = Release|x64
+		{575796FB-D360-48EF-8FE1-36D1DF95E227}.Release|x64.Build.0 = Release|x64
+		{575796FB-D360-48EF-8FE1-36D1DF95E227}.Release|x86.ActiveCfg = Release|Win32
+		{575796FB-D360-48EF-8FE1-36D1DF95E227}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
