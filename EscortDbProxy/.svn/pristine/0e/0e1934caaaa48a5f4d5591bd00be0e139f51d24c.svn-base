@@ -1,0 +1,5 @@
+LIBRARY
+EXPORTS
+	DbProxy_Start @1
+	DbProxy_Stop @2
+	DbProxy_SetLogType @3
