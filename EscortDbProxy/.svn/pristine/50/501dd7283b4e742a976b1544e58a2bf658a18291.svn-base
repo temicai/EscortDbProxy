@@ -750,8 +750,7 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 	if (m_readConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->ulStatementLen) {
 		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%lu, execute query sql: %s\r\n",
 			__FUNCTION__, __LINE__, uiQrySeq_, ulQryTime_, pSqlStatement_->pStatement);
-		//writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
-		printf(szLog);
+		writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 		int nErr = mysql_real_query(m_readConn, pSqlStatement_->pStatement, pSqlStatement_->ulStatementLen);
 		if (nErr == 0) {
 			MYSQL_RES * res_ptr = mysql_store_result(m_readConn);
@@ -1173,8 +1172,7 @@ void DbProxy::handleSqlExec(dbproxy::SqlStatement * pSqlStatement_, unsigned int
 	if (m_writeConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->ulStatementLen) {
 		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%lu, execute sql=%s\r\n",
 			__FUNCTION__, __LINE__, uiExecSeq_, ulExecTime_, pSqlStatement_->pStatement);
-		//writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
-		printf(szLog);
+		writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 		int nErr = mysql_real_query(m_writeConn, pSqlStatement_->pStatement, pSqlStatement_->ulStatementLen);
 		if (nErr == 0) {
 			my_ulonglong nAffectedRow = mysql_affected_rows(m_writeConn);
@@ -1206,8 +1204,7 @@ void DbProxy::handleSqlLocate(dbproxy::SqlStatement * pSqlStatement_, unsigned i
 	if (m_locateConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->ulStatementLen) {
 		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%lu, execute locate sql=%s\r\n",
 			__FUNCTION__, __LINE__, uiLocateSeq_, ulLocateTime_, pSqlStatement_->pStatement);
-		//writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
-		printf(szLog);
+		writeLog(szLog, LOGCATEGORY_INFORMATION, m_nLogType);
 		int nErr = mysql_real_query(m_locateConn, pSqlStatement_->pStatement, pSqlStatement_->ulStatementLen);
 		if (nErr == 0) {
 			my_ulonglong nAffectedRow = mysql_affected_rows(m_writeConn);
@@ -2978,10 +2975,8 @@ int DbProxy::handleTopicBindMsg(TopicBindMessage * pBindMsg_)
 		pthread_mutex_lock(&g_mutex4GuarderList);
 		Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, pBindMsg_->szGuarder);
 		if (pGuarder) {
-			//snprintf(pGuarder->szBindDevice, sizeof(pGuarder->szBindDevice), "%s_%s",
-			//	pBindMsg_->szFactoryId, pBindMsg_->szDeviceId);
-			strncpy_s(pGuarder->szBindDevice, sizeof(pGuarder->szBindDevice), pBindMsg_->szDeviceId, 
-				strlen(pBindMsg_->szDeviceId));
+			snprintf(pGuarder->szBindDevice, sizeof(pGuarder->szBindDevice), "%s_%s",
+				pBindMsg_->szFactoryId, pBindMsg_->szDeviceId);
 			pGuarder->uiState = STATE_GUARDER_BIND;
 		}
 		pthread_mutex_unlock(&g_mutex4GuarderList);
@@ -4629,11 +4624,9 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 						}
 						pthread_mutex_unlock(&g_mutex4GuarderList);
 						if (bUpdateData) {
-							char szSqlDatetime[20] = { 0 };
-							format_sqldatetime((unsigned long)time(NULL), szSqlDatetime, sizeof(szSqlDatetime));
 							char szUpdateGuarderSql[256] = { 0 };
-							snprintf(szUpdateGuarderSql, sizeof(szUpdateGuarderSql), "update user_info set Password='%s', "
-								"LastOptTime='%s' where UserID='%s';", pSrcGuarder->szPassword, szSqlDatetime, szGuarder);
+							snprintf(szUpdateGuarderSql, sizeof(szUpdateGuarderSql), "update user_info set Password='%s' "
+								"where UserID='%s';", pSrcGuarder->szPassword, szGuarder);
 							size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
 							dbproxy::SqlTransaction * pSqlTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
 							pSqlTransaction->uiSqlCount = 1;

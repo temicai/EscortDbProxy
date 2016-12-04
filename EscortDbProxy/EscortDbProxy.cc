@@ -261,3 +261,4 @@ DB_API int __stdcall DbProxy_SetLogType(unsigned int uiInst_, int nLogType_)
 	pthread_mutex_unlock(&g_mutex4InstList);
 	return result;
 }
+
