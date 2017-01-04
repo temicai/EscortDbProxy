@@ -3323,7 +3323,7 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 		char szLocateSql[256] = { 0 };
 		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, "
 			"IsOut, RecordTime, Latitude, Longitude, Speed, Course, Power) values (%d, '%s', '%s', %d, "
-			"'%s', %.06f, %.06f, %.04f, %d, %u);", szLocateDbName, escort_db::E_LOCATE_GPS,
+			"'%s', %.06f, %.06f, %.04f, %d, %u)", szLocateDbName, escort_db::E_LOCATE_GPS, 
 			pGpsLocateMsg_->szDeviceId, bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime, 
 			pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, 
 			pGpsLocateMsg_->nDirection, pGpsLocateMsg_->usBattery);
@@ -3333,7 +3333,7 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 		char szLocateSql2[256] = { 0 };
 		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID, "
 			"IsOut, RecordTime, Latitude, Longitude, Speed, Course, Power) values (%d, '%s', '%s', %d, "
-			"'%s', %.06f, %.06f, %.04f, %d, %u);", szLocateDbName2, escort_db::E_LOCATE_GPS,
+			"'%s', %.06f, %.06f, %.04f, %d, %u)", szLocateDbName2, escort_db::E_LOCATE_GPS,
 			pGpsLocateMsg_->szDeviceId, bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime,
 			pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, 
 			pGpsLocateMsg_->nDirection, pGpsLocateMsg_->usBattery);
@@ -3474,7 +3474,7 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 		char szLocateSql[256] = { 0 };
 		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, "
 			"IsOut, RecordTime, Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, "
-			"%.06f, %u);", szLocateDbName, (int)escort_db::E_LOCATE_LBS, pLbsLocateMsg_->szDeviceId,
+			"%.06f, %u)", szLocateDbName, (int)escort_db::E_LOCATE_LBS, pLbsLocateMsg_->szDeviceId,
 			bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime, pLbsLocateMsg_->dLat,
 			pLbsLocateMsg_->dLng, usBattery);
 		char szLocateSql2[256] = { 0 };
@@ -3483,7 +3483,7 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 			tm_locateTime.tm_mday);
 		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID,"
 			" IsOut, RecordTime, Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, "
-			"%.06f, %u);", szLocateDbName2, (int)escort_db::E_LOCATE_LBS, pLbsLocateMsg_->szDeviceId,
+			"%.06f, %u)", szLocateDbName2, (int)escort_db::E_LOCATE_LBS, pLbsLocateMsg_->szDeviceId,
 			bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime, pLbsLocateMsg_->dLat,
 			pLbsLocateMsg_->dLng, usBattery);
 		size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
@@ -3762,7 +3762,7 @@ int DbProxy::handleTopicLowpoweAlarmMsg(TopicAlarmMessageLowpower * pLowpoweAlar
 		unsigned int uiCount = 0;
 		if (bLastest) {	
 			snprintf(szDevSql, sizeof(szDevSql), "update device_info set Power=%u, LastCommuncation='%s',"
-				" LastOptTime='%s' where DeviceID='%s';", pLowpoweAlarmMsg_->usBattery, szSqlDatetime,
+				" LastOptType='%s' where DeviceID='%s';", pLowpoweAlarmMsg_->usBattery, szSqlDatetime,
 				szSqlNow,	pLowpoweAlarmMsg_->szDeviceId);
 			uiCount += 1;
 		}
@@ -3890,7 +3890,7 @@ int DbProxy::handleTopicLooseAlarmMsg(TopicAlarmMessageLoose * pLooseAlarmMsg_)
 		if (bWork && strlen(szTaskId)) {
 			snprintf(szWarnSql, sizeof(szWarnSql), "insert into alarm_info (TaskID, AlarmType, ActionType, "
 				"RecordTime) values ('%s', %u, %u, '%s');", szTaskId, escort_db::E_ALMTYPE_LOOSE,
-				pLooseAlarmMsg_->usMode, szSqlNow);
+				pLooseAlarmMsg_->usMode, pLooseAlarmMsg_->szDeviceId);
 			uiCount += 1;
 		}
 		if (uiCount) {
@@ -5373,75 +5373,6 @@ int supervise(zloop_t * loop_, int timer_id_, void * arg_)
 					}
 				}
 				pthread_mutex_unlock(&DbProxy::g_mutex4UpdateTime);
-			}
-			if (pProxy->m_nTimerTickCount % 90 == 0) { //15min
-				//keep connection alive
-				char szLog[512] = { 0 };
-				if (pProxy->m_locateConn) {
-					if (mysql_ping(pProxy->m_locateConn) != 0) {
-						//connection exception
-						mysql_close(pProxy->m_locateConn);
-						pProxy->m_locateConn = NULL;
-						//re-connection
-						pProxy->m_locateConn = mysql_init(NULL);
-						if (pProxy->m_locateConn && mysql_real_connect(pProxy->m_locateConn, pProxy->m_zkDbProxy.szDbHostIp, 
-							pProxy->m_zkDbProxy.szDbUser, pProxy->m_zkDbProxy.szDbPasswd, pProxy->m_zkDbProxy.szLocateSample,
-							3306, NULL, 0)) {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect db %s, ip=%s, user=%s at %ld\r\n", 
-								__FUNCTION__, __LINE__,	pProxy->m_zkDbProxy.szLocateSample,	pProxy->m_zkDbProxy.szDbHostIp, 
-								pProxy->m_zkDbProxy.szDbUser, (long)time(NULL));
-							pProxy->writeLog(szLog, LOGCATEGORY_INFORMATION, pProxy->m_nLogType);
-						}
-					}
-				}
-				if (pProxy->m_readConn) {
-					if (mysql_ping(pProxy->m_readConn) != 0) {
-						mysql_close(pProxy->m_readConn);
-						pProxy->m_readConn = NULL;
-						//re-connection
-						pProxy->m_readConn = mysql_init(NULL);
-						if (pProxy->m_readConn && mysql_real_connect(pProxy->m_readConn, pProxy->m_zkDbProxy.szDbHostIp,
-							pProxy->m_zkDbProxy.szDbUser, pProxy->m_zkDbProxy.szDbPasswd, pProxy->m_zkDbProxy.szMajorSample,
-							3306, NULL, 0)) {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect db %s, ip=%s, user=%s at %ld\r\n",
-								__FUNCTION__, __LINE__, pProxy->m_zkDbProxy.szMajorSample, pProxy->m_zkDbProxy.szDbHostIp,
-								pProxy->m_zkDbProxy.szDbUser, (long)time(NULL));
-							pProxy->writeLog(szLog, LOGCATEGORY_INFORMATION, pProxy->m_nLogType);
-						}
-					}
-				}
-				if (pProxy->m_writeConn) {
-					if (mysql_ping(pProxy->m_writeConn) != 0) {
-						mysql_close(pProxy->m_writeConn);
-						pProxy->m_writeConn = NULL;
-						//re-connection
-						pProxy->m_writeConn = mysql_init(NULL);
-						if (pProxy->m_writeConn && mysql_real_connect(pProxy->m_writeConn, pProxy->m_zkDbProxy.szDbHostIp,
-							pProxy->m_zkDbProxy.szDbUser, pProxy->m_zkDbProxy.szDbPasswd, pProxy->m_zkDbProxy.szMajorSample,
-							3306, NULL, 0)) {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect db %s, ip=%s, user=%s at %ld\r\n",
-								__FUNCTION__, __LINE__, pProxy->m_zkDbProxy.szMajorSample, pProxy->m_zkDbProxy.szDbHostIp,
-								pProxy->m_zkDbProxy.szDbUser, (long)time(NULL));
-							pProxy->writeLog(szLog, LOGCATEGORY_INFORMATION, pProxy->m_nLogType);
-						}
-					}
-				}
-				if (pProxy->m_updateConn) {
-					if (mysql_ping(pProxy->m_updateConn) != 0) {
-						mysql_close(pProxy->m_updateConn);
-						pProxy->m_updateConn = NULL;
-						//re-connection
-						pProxy->m_updateConn = mysql_init(NULL);
-						if (pProxy->m_updateConn && mysql_real_connect(pProxy->m_updateConn, pProxy->m_zkDbProxy.szDbHostIp,
-							pProxy->m_zkDbProxy.szDbUser, pProxy->m_zkDbProxy.szDbPasswd, pProxy->m_zkDbProxy.szMajorSample,
-							3306, NULL, 0)) {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect db %s, ip=%s, user=%s at %ld\r\n",
-								__FUNCTION__, __LINE__, pProxy->m_zkDbProxy.szMajorSample, pProxy->m_zkDbProxy.szDbHostIp,
-								pProxy->m_zkDbProxy.szDbUser, (long)time(NULL));
-							pProxy->writeLog(szLog, LOGCATEGORY_INFORMATION, pProxy->m_nLogType);
-						}
-					}
-				}
 			}
 			pProxy->m_nTimerTickCount++;
 			if (pProxy->m_nTimerTickCount == 720) {
