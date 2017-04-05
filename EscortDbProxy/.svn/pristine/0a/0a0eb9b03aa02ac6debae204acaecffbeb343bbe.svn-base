@@ -5,8 +5,6 @@ zhash_t * DbProxy::g_guarderList = NULL;
 zhash_t * DbProxy::g_taskList = NULL;
 zhash_t * DbProxy::g_personList = NULL;
 zhash_t * DbProxy::g_orgList = NULL;
-zhash_t * DbProxy::g_fenceList = NULL;
-zhash_t * DbProxy::g_fenceTaskList = NULL;
 pthread_mutex_t DbProxy::g_mutex4DevList;
 pthread_mutex_t DbProxy::g_mutex4GuarderList;
 pthread_mutex_t DbProxy::g_mutex4TaskList;
@@ -15,9 +13,6 @@ pthread_mutex_t DbProxy::g_mutex4OrgList;
 pthread_mutex_t DbProxy::g_mutex4InteractSequence;
 pthread_mutex_t DbProxy::g_mutex4PipeSequence;
 pthread_mutex_t DbProxy::g_mutex4UpdateTime;
-pthread_mutex_t DbProxy::g_mutex4PipeState;
-pthread_mutex_t DbProxy::g_mutex4FenceList;
-pthread_mutex_t DbProxy::g_mutex4FenceTaskList;
 int DbProxy::g_nRefCount = 0;
 unsigned int DbProxy::g_uiInteractSequence = 0;
 unsigned short DbProxy::g_usPipeSequence = 0;
@@ -164,8 +159,6 @@ DbProxy::DbProxy(const char * pZkHost_, const char * pRoot_)
 		g_taskList = zhash_new();
 		g_personList = zhash_new();
 		g_orgList = zhash_new();
-		g_fenceList = zhash_new();
-		g_fenceTaskList = zhash_new();
 		g_ulLastUpdateTime = 0;
 		g_nUpdatePipeState = dbproxy::E_PIPE_CLOSE; 
 		pthread_mutex_init(&g_mutex4DevList, NULL);
@@ -176,9 +169,6 @@ DbProxy::DbProxy(const char * pZkHost_, const char * pRoot_)
 		pthread_mutex_init(&g_mutex4InteractSequence, NULL);
 		pthread_mutex_init(&g_mutex4PipeSequence, NULL);
 		pthread_mutex_init(&g_mutex4UpdateTime, NULL);
-		pthread_mutex_init(&g_mutex4PipeState, NULL);
-		pthread_mutex_init(&g_mutex4FenceList, NULL);
-		pthread_mutex_init(&g_mutex4FenceTaskList, NULL);
 	}
 	g_nRefCount++;
 
@@ -224,12 +214,6 @@ DbProxy::~DbProxy()
 		if (g_orgList) {
 			zhash_destroy(&g_orgList);
 		}
-		if (g_fenceList) {
-			zhash_destroy(&g_fenceList);
-		}
-		if (g_fenceTaskList) {
-			zhash_destroy(&g_fenceTaskList);
-		}
 		pthread_mutex_destroy(&g_mutex4DevList);
 		pthread_mutex_destroy(&g_mutex4GuarderList);
 		pthread_mutex_destroy(&g_mutex4TaskList);
@@ -238,9 +222,6 @@ DbProxy::~DbProxy()
 		pthread_mutex_destroy(&g_mutex4InteractSequence);
 		pthread_mutex_destroy(&g_mutex4PipeSequence);
 		pthread_mutex_destroy(&g_mutex4UpdateTime);
-		pthread_mutex_destroy(&g_mutex4PipeState);
-		pthread_mutex_destroy(&g_mutex4FenceList);
-		pthread_mutex_destroy(&g_mutex4FenceTaskList);
 		g_nRefCount = 0;
 	}
 	pthread_mutex_destroy(&m_mutex4LogQue);
@@ -286,31 +267,28 @@ int DbProxy::Start(const char * pHost_, unsigned short usReceptPort_, const char
 	if (m_ctx == NULL) {
 		m_ctx = zctx_new();
 	}
-	int err = 0;
 	m_interactor = zsocket_new(m_ctx, ZMQ_DEALER);
 	zuuid_t * uuid = zuuid_new();
 	const char * szUuid = zuuid_str(uuid);
 	zsocket_set_identity(m_interactor, szUuid);
-	err = zsocket_connect(m_interactor, "tcp://%s:%u", strlen(pMidwareHost_) ? pMidwareHost_ : "127.0.0.1",
+	zsocket_connect(m_interactor, "tcp://%s:%u", strlen(pMidwareHost_) ? pMidwareHost_ : "127.0.0.1",
 		usContactPort_ > 0 ? usContactPort_ : 25001);
 	zuuid_destroy(&uuid);
 
 	m_subscriber = zsocket_new(m_ctx, ZMQ_SUB);
 	zsocket_set_subscribe(m_subscriber, "");
-	err = zsocket_connect(m_subscriber, "tcp://%s:%u", strlen(pMidwareHost_) ? pMidwareHost_ : "127.0.0.1",
+	zsocket_connect(m_subscriber, "tcp://%s:%u", strlen(pMidwareHost_) ? pMidwareHost_ : "127.0.0.1",
 		usPublishPort_ > 0 ? usPublishPort_ : 25000);
 
 	m_pipeline = zsocket_new(m_ctx, ZMQ_DEALER);
 	uuid = zuuid_new();
 	const char * szUuid2 = zuuid_str(uuid);
 	zsocket_set_identity(m_pipeline, szUuid2);
-	err = zsocket_connect(m_pipeline, "tcp://%s:%u", strlen(pMidwareHost_) ? pMidwareHost_ : "127.0.0.1",
+	zsocket_connect(m_pipeline, "tcp://%s:%u", strlen(pMidwareHost_) ? pMidwareHost_ : "127.0.0.1",
 		usCollectPort_ > 0 ? usCollectPort_ : 25002);
-	strncpy_s(m_szPipelineIdentity, sizeof(m_szPipelineIdentity), szUuid2, strlen(szUuid2));
-	zuuid_destroy(&uuid);
 
 	m_reception = zsocket_new(m_ctx, ZMQ_ROUTER);
-	err = zsocket_bind(m_reception, "tcp://*:%u", usReceptPort_);
+	zsocket_bind(m_reception, "tcp://*:%u", usReceptPort_);
 
 	m_readConn = mysql_init(NULL);
 	m_writeConn = mysql_init(NULL);
@@ -768,7 +746,7 @@ void DbProxy::dealSqlLocate()
 void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigned int uiQrySeq_, 
 	unsigned long ulQryTime_, const char * pQryFrom_)
 {
-	char szLog[1024] = { 0 };
+	char szLog[512] = { 0 };
 	pthread_mutex_lock(&m_mutex4ReadConn);
 	if (m_readConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->ulStatementLen) {
 		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%lu, execute query sql: %s\r\n",
@@ -863,9 +841,8 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							}
 							else {
 								pDev->deviceBasic.nStatus = DEV_OFFLINE;
-							}
+							}						
 							memcpy_s(&pDevList[i], nDeviceSize, pDev, nDeviceSize);
-
 							pthread_mutex_lock(&g_mutex4DevList);
 							zhash_update(g_deviceList, pSqlDevList[i].szDeviceId, pDev);
 							zhash_freefn(g_deviceList, pSqlDevList[i].szDeviceId, free);
@@ -914,10 +891,6 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							if (row[4] && strlen(row[4])) {
 								pSqlGuarderList[i].nUserRoleType = atoi(row[4]);
 							}
-							if (row[5] && strlen(row[5])) {
-								strncpy_s(pSqlGuarderList[i].szPhoneCode, sizeof(pSqlGuarderList[i].szPhoneCode),
-									row[5], strlen(row[5]));
-							}
 							Guarder * pGuarder = (Guarder *)zmalloc(nGuarderSize);
 							memset(pGuarder, 0, nGuarderSize);
 							strncpy_s(pGuarder->szId, sizeof(pGuarder->szId), pSqlGuarderList[i].szUserId,
@@ -930,10 +903,7 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 								strlen(pSqlGuarderList[i].szPasswd));
 							pGuarder->usState = STATE_GUARDER_FREE;
 							pGuarder->usRoleType = (unsigned short)pSqlGuarderList[i].nUserRoleType;
-							if (strlen(pSqlGuarderList[i].szPhoneCode)) {
-								strncpy_s(pGuarder->szPhoneCode, sizeof(pGuarder->szPhoneCode), pSqlGuarderList[i].szPhoneCode,
-									strlen(pSqlGuarderList[i].szPhoneCode));
-							}
+
 							memcpy_s(&pGuarderList[i], nGuarderSize, pGuarder, nGuarderSize);
 
 							pthread_mutex_lock(&g_mutex4GuarderList);
@@ -1009,8 +979,8 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 								strlen(pSqlTaskList[i].szDeviceId));
 							strncpy_s(pTask->szGuarder, sizeof(pTask->szGuarder), pSqlTaskList[i].szGuarderId,
 								strlen(pSqlTaskList[i].szGuarderId));
-							unsigned long ulTaskStartTime = sqldatetime2time(pSqlTaskList[i].szStartTime);
-							format_datetime(ulTaskStartTime, pTask->szTaskStartTime, sizeof(pTask->szTaskStartTime));
+							unsigned long ulTaskStartTime = sqldatetime2time(pSqlTaskList[i].szStartTime);						
+							format_datetime(ulTaskStartTime, pTask->szTaskStartTime, sizeof(pTask->szTaskStartTime));					
 							strncpy_s(pTask->szDestination, sizeof(pTask->szDestination), pSqlTaskList[i].szDestination,
 								strlen(pSqlTaskList[i].szDestination));
 							pTask->nTaskType = (uint8_t)pSqlTaskList[i].usTaskType;
@@ -1166,119 +1136,6 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 						if (pOrgList) {
 							free(pOrgList);
 							pOrgList = NULL;
-						}
-					}
-					else if (pSqlStatement_->uiCorrelativeTable == escort_db::E_TBL_FENCE) {
-						escort_db::SqlFence * pSqlFenceList = (escort_db::SqlFence *)zmalloc(sizeof(escort_db::SqlFence)
-							* nCount);
-						size_t nFenceSize = sizeof(EscortFence);
-						EscortFence * pFenceList = (EscortFence *)zmalloc(nFenceSize * nCount);
-						int i = 0; 
-						while (row = mysql_fetch_row(res_ptr)) {
-							if (row[0]) {
-								pSqlFenceList[i].nFenceId = atoi(row[0]);
-							}
-							if (row[1]) {
-								pSqlFenceList[i].usFenceType = (unsigned short)atoi(row[1]);
-							}
-							if (row[2] && strlen(row[2])) {
-								strncpy_s(pSqlFenceList[i].szFenceContent, sizeof(pSqlFenceList[i].szFenceContent),
-									row[2], strlen(row[2]));
-							}
-							if (row[3]) {
-								pSqlFenceList[i].usFenceActive = (unsigned short)atoi(row[3]);
-							}
-							
-							EscortFence * pFence = (EscortFence *)zmalloc(nFenceSize);
-							pFence->nFenceId = pSqlFenceList[i].nFenceId;
-							pFence->nFenceType = pSqlFenceList[i].usFenceType;
-							pFence->nActiveFlag = pSqlFenceList[i].usFenceActive;
-							strncpy_s(pFence->szFenceContent, sizeof(pFence->szFenceContent), 
-								pSqlFenceList[i].szFenceContent, strlen(pSqlFenceList[i].szFenceContent));
-							char szFenceId[10] = { 0 };
-							sprintf_s(szFenceId, sizeof(szFenceId), "%d", pFence->nFenceId);
-							
-							pthread_mutex_lock(&g_mutex4FenceList);
-							zhash_update(g_fenceList, szFenceId, pFence);
-							zhash_freefn(g_fenceList, szFenceId, free);
-							pthread_mutex_unlock(&g_mutex4FenceList);
-
-							memcpy_s(&pFenceList[i], nFenceSize, pFence, nFenceSize);
-							
-							i++;
-						}
-						if (pQryFrom_) {
-							replyQuery(pFenceList, i, pSqlStatement_->uiCorrelativeTable, uiQrySeq_, ulQryTime_, pQryFrom_);
-						}
-						if (pSqlFenceList) {
-							free(pSqlFenceList);
-							pSqlFenceList = NULL;
-						}
-						if (pFenceList) {
-							free(pFenceList);
-							pFenceList = NULL;
-						}
-					}
-					else if (pSqlStatement_->uiCorrelativeTable == escort_db::E_TBL_TASK_FENCE) {
-						escort_db::SqlFenceTask * pSqlFenceTaskList = (escort_db::SqlFenceTask *)zmalloc(
-							sizeof(escort_db::SqlFenceTask) * nCount);
-						size_t nFenceTaskSize = sizeof(EscortFenceTask);
-						EscortFenceTask * pFenceTaskList = (EscortFenceTask *)zmalloc(nFenceTaskSize * nCount);
-						int i = 0;
-						while (row = mysql_fetch_row(res_ptr)) {
-							if (row[0]) {
-								pSqlFenceTaskList[i].nFenceTaskId = atoi(row[0]);
-							}
-							if (row[1]) {
-								pSqlFenceTaskList[i].nFenceId = atoi(row[1]);
-							}
-							if (row[2] && strlen(row[2])) { //factoryId
-								strncpy_s(pSqlFenceTaskList[i].szFactoryId, sizeof(pSqlFenceTaskList[i].szFactoryId),
-									row[2], strlen(row[2]));
-							}
-							if (row[3] && strlen(row[3])) { //deviceId
-								strncpy_s(pSqlFenceTaskList[i].szDeviceId, sizeof(pSqlFenceTaskList[i].szDeviceId),
-									row[3], strlen(row[3]));
-							}
-							if (row[4] && strlen(row[4])) { //startTime
-								strncpy_s(pSqlFenceTaskList[i].szTaskStartTime, sizeof(pSqlFenceTaskList[i].szTaskStartTime),
-									row[4], strlen(row[4]));
-							}
-
-							EscortFenceTask * pFenceTask = (EscortFenceTask *)zmalloc(nFenceTaskSize);
-							pFenceTask->nFenceTaskId = pSqlFenceTaskList[i].nFenceTaskId;
-							pFenceTask->nFenceId = pSqlFenceTaskList[i].nFenceId;
-							pFenceTask->nTaskState = 0;
-							strncpy_s(pFenceTask->szFactoryId, sizeof(pFenceTask->szFactoryId),
-								pSqlFenceTaskList[i].szFactoryId, strlen(pSqlFenceTaskList[i].szFactoryId));
-							strncpy_s(pFenceTask->szDeviceId, sizeof(pFenceTask->szDeviceId),
-								pSqlFenceTaskList[i].szDeviceId, strlen(pSqlFenceTaskList[i].szDeviceId));
-							unsigned long ulStartTime = sqldatetime2time(pSqlFenceTaskList[i].szTaskStartTime);
-							format_datetime(ulStartTime, pFenceTask->szStartTime, sizeof(pFenceTask->szStartTime));
-							pFenceTask->szStopTime[0] = '\0';
-							char szFenceTaskId[10] = { 0 };
-							sprintf_s(szFenceTaskId, sizeof(szFenceTaskId), "%d", pFenceTask->nFenceTaskId);
-
-							pthread_mutex_lock(&g_mutex4FenceTaskList);
-							zhash_update(g_fenceTaskList, szFenceTaskId, pFenceTask);
-							zhash_freefn(g_fenceTaskList, szFenceTaskId, free);
-							pthread_mutex_unlock(&g_mutex4FenceTaskList);
-
-							memcpy_s(&pFenceTaskList[i], nFenceTaskSize, pFenceTask, nFenceTaskSize);
-
-							i++;
-						}
-						if (pQryFrom_) {
-							replyQuery(pFenceTaskList, nCount, pSqlStatement_->uiCorrelativeTable, uiQrySeq_, ulQryTime_,
-								pQryFrom_);
-						}
-						if (pSqlFenceTaskList) {
-							free(pSqlFenceTaskList);
-							pSqlFenceTaskList = NULL;
-						}
-						if (pFenceTaskList) {
-							free(pFenceTaskList);
-							pFenceTaskList = NULL;
 						}
 					}
 				}
@@ -1504,22 +1361,6 @@ void DbProxy::replyQuery(void * pReplyData_, unsigned int uiReplyCount_, unsigne
 					container.pStoreResult[container.uiResultLen] = '\0';
 					break;
 				}
-				case escort_db::E_TBL_FENCE: {
-					EscortFence * pFenceList = (EscortFence *)pReplyData_;
-					container.uiResultLen = sizeof(EscortFence) * uiReplyCount_;
-					container.pStoreResult = (unsigned char *)zmalloc(container.uiResultLen + 1);
-					memcpy_s(container.pStoreResult, container.uiResultLen, pFenceList, container.uiResultLen);
-					container.pStoreResult[container.uiResultLen] = '\0';
-					break;
-				}
-				case escort_db::E_TBL_TASK_FENCE: {
-					EscortFenceTask * pFenceTaskList = (EscortFenceTask *)pReplyData_;
-					container.uiResultLen = sizeof(EscortFenceTask) * uiReplyCount_;
-					container.pStoreResult = (unsigned char *)zmalloc(container.uiResultLen + 1);
-					memcpy_s(container.pStoreResult, container.uiResultLen, pFenceTaskList, container.uiResultLen);
-					container.pStoreResult[container.uiResultLen] = '\0';
-					break;
-				}
 			}
 			if (container.uiResultLen) {
 				zmsg_t * msg_reply = zmsg_new();
@@ -1584,19 +1425,16 @@ void DbProxy::dealNetwork()
 				zframe_t * frame_type = zmsg_pop(subMsg);
 				zframe_t * frame_uuid = zmsg_pop(subMsg);
 				zframe_t * frame_body = zmsg_pop(subMsg);
-				zframe_t * frame_from = zmsg_pop(subMsg);
 				char * strMark = zframe_strdup(frame_mark);
 				char * strSeq = zframe_strdup(frame_seq);
 				char * strType = zframe_strdup(frame_type);
 				char * strUuid = zframe_strdup(frame_uuid);
 				char * strBody = zframe_strdup(frame_body);
-				char * strFrom = zframe_strdup(frame_from);
 				TopicMessage * pMsg = (TopicMessage *)zmalloc(sizeof(TopicMessage));
 				if (pMsg) {
 					strncpy_s(pMsg->szMsgMark, sizeof(pMsg->szMsgMark), strMark, strlen(strMark));
 					strncpy_s(pMsg->szMsgUuid, sizeof(pMsg->szMsgUuid), strUuid, strlen(strUuid));
 					strncpy_s(pMsg->szMsgBody, sizeof(pMsg->szMsgBody), strBody, strlen(strBody));
-					strncpy_s(pMsg->szMsgFrom, sizeof(pMsg->szMsgFrom), strFrom, strlen(strFrom));
 					pMsg->usMsgSequence = (unsigned short)atoi(strSeq);
 					pMsg->usMsgType = (unsigned short)atoi(strType);
 					if (!addTopicMsg(pMsg)) {
@@ -1609,14 +1447,12 @@ void DbProxy::dealNetwork()
 				zframe_destroy(&frame_type);
 				zframe_destroy(&frame_uuid);
 				zframe_destroy(&frame_body);
-				zframe_destroy(&frame_from);
 				zmsg_destroy(&subMsg);
 				free(strMark);
 				free(strSeq);
 				free(strType);
 				free(strUuid);
 				free(strBody);
-				free(strFrom);
 				zmsg_destroy(&subMsg);
 			}
 		}
@@ -1744,7 +1580,7 @@ void DbProxy::dealTopicMsg()
 		pthread_mutex_unlock(&m_mutex4TopicMsgQue);
 		if (pMsg) {
 			switch (pMsg->usMsgType) {
-				case PUBMSG_DEVICE_ALIVE: {
+				case MSG_DEVICE_ALIVE: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						TopicAliveMessage aliveMsg;
@@ -1821,7 +1657,7 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_ONLINE: {
+				case MSG_DEVICE_ONLINE: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						TopicOnlineMessage onlineMsg;
@@ -1898,7 +1734,7 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_OFFLINE: {
+				case MSG_DEVICE_OFFLINE: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						TopicOfflineMessage offlineMsg;
@@ -1966,7 +1802,7 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_LOCATE: {
+				case MSG_DEVICE_LOCATE: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						int nSubType = -1;
@@ -2322,7 +2158,7 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_ALARM: {
+				case MSG_DEVICE_ALARM: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						int nSubType = -1;
@@ -2622,7 +2458,7 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_DEVICE_BIND: {
+				case MSG_DEVICE_BIND: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						TopicBindMessage bindMsg;
@@ -2714,7 +2550,7 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_TASK: {
+				case MSG_TASK: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						int nSubType = -1;
@@ -2798,9 +2634,8 @@ void DbProxy::dealTopicMsg()
 								if (doc["destination"].IsString()) {
 									size_t nSize = doc["destination"].GetStringLength();
 									if (nSize) {
-										strncpy_s(taskMsg.szDestination, sizeof(taskMsg.szDestination), 
-											doc["destination"].GetString(),
-											sizeof(taskMsg.szDestination) >= nSize ? nSize : sizeof(taskMsg.szDestination));
+										strncpy_s(taskMsg.szDestination, sizeof(taskMsg.szDestination),
+											doc["destination"].GetString(), nSize);
 									}
 								}
 							}
@@ -2809,8 +2644,7 @@ void DbProxy::dealTopicMsg()
 									size_t nSize = doc["target"].GetStringLength();
 									if (nSize) {
 										strncpy_s(taskMsg.szTarget, sizeof(taskMsg.szTarget),
-											doc["target"].GetString(), 
-											sizeof(taskMsg.szTarget) >= nSize ? nSize : sizeof(taskMsg.szDestination));
+											doc["target"].GetString(), nSize);
 									}
 								}
 							}
@@ -2849,7 +2683,7 @@ void DbProxy::dealTopicMsg()
 								writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 							}
 						}
-						else if (nSubType == TASK_OPT_CLOSE) { 
+						else if (nSubType == TASK_OPT_CLOSE) {  // if (nState == 1 || nState == 2) {
 							int nState = -1;
 							TopicTaskCloseMessage taskCloseMsg;
 							bool bValidTask = false;
@@ -2952,7 +2786,7 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_BUFFER_MODIFY: {
+				case MSG_BUFFER_MODIFY: {
 					rapidjson::Document doc;
 					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
 						int nModifyObject = 0;
@@ -3002,7 +2836,6 @@ void DbProxy::dealTopicMsg()
 									break;
 								}
 							}
-							storeTopicMsg(pMsg, strdatetime2time(szDateTime));
 						}
 						else {
 							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]parse MSG_BUFFER_MODIFY msg data, uuid=%s"
@@ -3020,12 +2853,6 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
-				case PUBMSG_ACCOUNT_LOGIN: {
-					break;
-				}
-				case PUBMSG_ACCOUNT_LOGOUT: {
-					break;
-				}
 				default: {
 					snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]unsupport msg type: %u\r\n", __FUNCTION__,
 						__LINE__, pMsg->usMsgType);
@@ -3040,14 +2867,13 @@ void DbProxy::dealTopicMsg()
 void DbProxy::storeTopicMsg(TopicMessage * pMsg_, unsigned long ulMsgTime_)
 {
 	if (pMsg_) {
-		char szLog[512] = { 0 };
-		char szSql[1024] = { 0 };
+		char szLog[256] = { 0 };
+		char szSql[512] = { 0 };
 		char szSqlDatetime[20] = { 0 };
 		format_sqldatetime(ulMsgTime_, szSqlDatetime, sizeof(szSqlDatetime));
 		snprintf(szSql, sizeof(szSql), "insert into message_info (msgUuid, msgType, msgSeq, msgTopic, "
-			"msgBody, msgTime, msgFrom) values ('%s', %u, %u, '%s', '%s', '%s', '%s');", pMsg_->szMsgUuid, 
-			pMsg_->usMsgType, pMsg_->usMsgSequence, pMsg_->szMsgMark, pMsg_->szMsgBody, szSqlDatetime, 
-			pMsg_->szMsgFrom);
+			"msgBody, msgTime) values ('%s', %u, %u, '%s', '%s', '%s');", pMsg_->szMsgUuid, 
+			pMsg_->usMsgType, pMsg_->usMsgSequence, pMsg_->szMsgMark, pMsg_->szMsgBody, szSqlDatetime);
 		size_t nSize = sizeof(dbproxy::SqlTransaction);
 		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nSize);
 		if (pTransaction) {
@@ -3108,16 +2934,16 @@ int DbProxy::handleTopicAliveMsg(TopicAliveMessage * pAliveMsg_)
 			char szSqlDatetime[20] = { 0 };
 			format_sqldatetime(pAliveMsg_->ulMessageTime, szSqlDatetime, sizeof(szSqlDatetime));
 			char szDevSql[512] = { 0 };
-			//if (bUpdateState) {
-			snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastCommuncation='%s', "
-				"Power=%u, Online=1 where DeviceID='%s';", szSqlDatetime, pAliveMsg_->usBattery,
-				pAliveMsg_->szDeviceId);
-			//}
-			//else {
-			//	snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastCommuncation='%s', "
-			//		"Power=%u, online=1 where DeviceID='%s';", szSqlDatetime, pAliveMsg_->usBattery,
-			//		pAliveMsg_->szDeviceId);
-			//}
+			if (bUpdateState) {
+				snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastCommuncation='%s', "
+					"Power=%u, Online=1 where DeviceID='%s';", szSqlDatetime, pAliveMsg_->usBattery,
+					pAliveMsg_->szDeviceId);
+			}
+			else {
+				snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastCommuncation='%s', "
+					"Power=%u where DeviceID='%s';", szSqlDatetime, pAliveMsg_->usBattery,
+					pAliveMsg_->szDeviceId);
+			}
 			dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
 				sizeof(dbproxy::SqlTransaction));
 			pTransaction->szTransactionFrom[0] = '\0';
@@ -3220,7 +3046,6 @@ int DbProxy::handleTopicOnlineMsg(TopicOnlineMessage * pOnlineMsg_)
 			pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
 			strncpy_s(pTransaction->pSqlList[0].pStatement, nSqlLen + 1, szSql, nSqlLen);
 			pTransaction->pSqlList[0].pStatement[nSqlLen] = '\0';
-
 			if (!addSqlTransaction(pTransaction, SQLTYPE_EXECUTE)) {
 				for (unsigned int i = 0; i < pTransaction->uiSqlCount; i++) {
 					if (pTransaction->pSqlList[i].pStatement) {
@@ -3242,9 +3067,6 @@ int DbProxy::handleTopicOfflineMsg(TopicOfflineMessage * pOfflineMsg_)
 {
 	int result = -1;
 	bool bLastest = false;
-	char szGuarder[20] = { 0 };
-	char szTaskId[12] = { 0 };
-	bool bHaveTask = true;
 	if (pOfflineMsg_) {
 		pthread_mutex_lock(&g_mutex4DevList);
 		if (zhash_size(g_deviceList)) {
@@ -3253,28 +3075,12 @@ int DbProxy::handleTopicOfflineMsg(TopicOfflineMessage * pOfflineMsg_)
 			if (pDev) {
 				result = 0;
 				if (pDev->deviceBasic.nStatus != DEV_OFFLINE) {
-					if (strlen(pDev->szBindGuard)) {
-						strncpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard, strlen(pDev->szBindGuard));
-					}
 					pDev->deviceBasic.nStatus = DEV_OFFLINE;
 					bLastest = true;
 				}
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
-		if (strlen(szGuarder)) {
-			pthread_mutex_lock(&g_mutex4GuarderList);
-			if (zhash_size(g_guarderList)) {
-				Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
-				if (pGuarder) {
-					if (strlen(pGuarder->szTaskId)) {
-						strncpy_s(szTaskId, sizeof(szTaskId), pGuarder->szTaskId, strlen(pGuarder->szTaskId));
-						bHaveTask = true;
-					}
-				}
-			}
-			pthread_mutex_unlock(&g_mutex4GuarderList);
-		}
 		if (bLastest) {
 			unsigned long ulTime = (unsigned long)time(NULL);
 			char szSqlNow[20] = { 0 };
@@ -3284,14 +3090,7 @@ int DbProxy::handleTopicOfflineMsg(TopicOfflineMessage * pOfflineMsg_)
 				" where DeviceID='%s';", szSqlNow, pOfflineMsg_->szDeviceId);
 			dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
 				sizeof(dbproxy::SqlTransaction));
-			unsigned int uiCount = 1;
-			char szAlarmSql[512] = { 0 };
-			if (strlen(szTaskId) && bHaveTask) {
-				snprintf(szAlarmSql, sizeof(szAlarmSql), "insert into alarm_info (TaskID, AlarmType, ActionType, "
-					"RecordTime) values ('%s', 0, 0, '%s');", szTaskId, szSqlNow);
-				uiCount += 1;
-			}
-			pTransaction->uiSqlCount = uiCount;
+			pTransaction->uiSqlCount = 1;
 			pTransaction->szTransactionFrom[0] = '\0';
 			pTransaction->uiTransactionSequence = getNextInteractSequence();
 			pTransaction->ulTransactionTime = ulTime;
@@ -3303,13 +3102,6 @@ int DbProxy::handleTopicOfflineMsg(TopicOfflineMessage * pOfflineMsg_)
 			pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
 			strncpy_s(pTransaction->pSqlList[0].pStatement, nSqlLen + 1, szDevSql, nSqlLen);
 			pTransaction->pSqlList[0].pStatement[nSqlLen] = '\0';
-			if (bHaveTask && strlen(szAlarmSql)) {
-				size_t nAlarmSqlLen = strlen(szAlarmSql);
-				pTransaction->pSqlList[1].ulStatementLen = nAlarmSqlLen;
-				pTransaction->pSqlList[1].pStatement = (char *)zmalloc(nAlarmSqlLen + 1);
-				strncpy_s(pTransaction->pSqlList[1].pStatement, nAlarmSqlLen + 1, szAlarmSql, nAlarmSqlLen);
-				pTransaction->pSqlList[1].pStatement[nAlarmSqlLen] = '\0';
-			}
 			if (!addSqlTransaction(pTransaction, SQLTYPE_EXECUTE)) {
 				for (unsigned int i = 0; i < pTransaction->uiSqlCount; i++) {
 					if (pTransaction->pSqlList[i].pStatement) {
@@ -3450,7 +3242,7 @@ int DbProxy::handleTopicTaskSubmitMsg(TopicTaskMessage * pTaskMsg_)
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
 		
-		char szPersonId[32] = { 0 };
+		char szPersonId[20] = { 0 };
 		Person person;
 		bool bNewPerson = false;
 		if (makePerson(pTaskMsg_->szTarget, &person)) {
@@ -3475,7 +3267,7 @@ int DbProxy::handleTopicTaskSubmitMsg(TopicTaskMessage * pTaskMsg_)
 		format_sqldatetime(pTaskMsg_->ulMessageTime, szSqlDatetime, sizeof(szSqlDatetime));
 		char szSqlNow[20] = { 0 };
 		format_sqldatetime((unsigned long)time(NULL), szSqlNow, sizeof(szSqlNow));
-		char szTaskSql[1024] = { 0 };
+		char szTaskSql[512] = { 0 };
 		char szDevSql[512] = { 0 };
 		char szPersonSql[512] = { 0 };
 		snprintf(szTaskSql, sizeof(szTaskSql), "insert into task_info (TaskID, TaskType, LimitDistance"
@@ -3796,9 +3588,13 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 			pGpsLocateMsg_->szDeviceId);
 		char szTaskId[12] = { 0 };
 		char szGuarder[20] = { 0 };
-		int nFleeFlag = 0;
+		bool bWork = false;
+		bool bFlee = false;
 		if (pDev) {
-			if (strlen(pDev->szBindGuard)) {
+			bool bGuard = (pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD;
+			bFlee = (pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE;
+			bWork = (bGuard || bFlee);
+			if (bWork && strlen(pDev->szBindGuard)) {
 				strncpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard, strlen(pDev->szBindGuard));
 			}
 			if (pGpsLocateMsg_->usFlag == 1) { //realtime
@@ -3812,10 +3608,10 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 					pDev->devicePosition.usLngType = pGpsLocateMsg_->usLngType;
 					bLastest = true;
 				}
-			}
+			}		
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
-		if (strlen(szGuarder)) {
+		if (bWork && strlen(szGuarder)) {
 			pthread_mutex_lock(&g_mutex4GuarderList);
 			Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
 			if (pGuarder) {
@@ -3824,16 +3620,6 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 				}
 			}
 			pthread_mutex_unlock(&g_mutex4GuarderList);
-		}
-		if (strlen(szTaskId)) {
-			pthread_mutex_lock(&g_mutex4TaskList);
-			if (zhash_size(g_taskList)) {
-				EscortTask * pTask = (EscortTask *)zhash_lookup(g_taskList, szTaskId);
-				if (pTask) {
-					nFleeFlag = pTask->nTaskFlee;
-				}
-			}
-			pthread_mutex_unlock(&g_mutex4TaskList);
 		}
 		result = 0;
 		time_t nLocateTime = (time_t)pGpsLocateMsg_->ulMessageTime;
@@ -3850,8 +3636,9 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, "
 			"IsOut, RecordTime, Latitude, Longitude, Speed, Course, Power) values (%d, '%s', '%s', %d, "
 			"'%s', %.06f, %.06f, %.04f, %d, %u);", szLocateDbName, escort_db::E_LOCATE_GPS,
-			pGpsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pGpsLocateMsg_->dLat, 
-			pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, pGpsLocateMsg_->nDirection, pGpsLocateMsg_->usBattery);
+			pGpsLocateMsg_->szDeviceId, bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime, 
+			pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, 
+			pGpsLocateMsg_->nDirection, pGpsLocateMsg_->usBattery);
 		char szLocateDbName2[32] = { 0 };
 		snprintf(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d",
 			tm_locateTime.tm_mday);
@@ -3859,8 +3646,9 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID, "
 			"IsOut, RecordTime, Latitude, Longitude, Speed, Course, Power) values (%d, '%s', '%s', %d, "
 			"'%s', %.06f, %.06f, %.04f, %d, %u);", szLocateDbName2, escort_db::E_LOCATE_GPS,
-			pGpsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pGpsLocateMsg_->dLat, 
-			pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, pGpsLocateMsg_->nDirection, pGpsLocateMsg_->usBattery);
+			pGpsLocateMsg_->szDeviceId, bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime,
+			pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, 
+			pGpsLocateMsg_->nDirection, pGpsLocateMsg_->usBattery);
 		size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
 		unsigned long ulTime = (unsigned long)time(NULL);
 		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
@@ -3940,7 +3728,8 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 	if (pLbsLocateMsg_) {
 		char szGuarder[20] = { 0 };
 		char szTaskId[12] = { 0 };
-		int nFleeFlag = 0;
+		bool bWork = false;
+		bool bFlee = false;
 		bool bLastest = false;
 		unsigned short usBattery = pLbsLocateMsg_->usBattery;
 
@@ -3951,7 +3740,10 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 			if (usBattery == 0) {
 				usBattery = (unsigned short)pDev->deviceBasic.nBattery;
 			}
-			if (strlen(pDev->szBindGuard)) {
+			bool bGuard = (pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD;
+			bFlee = (pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE;
+			bWork = (bGuard || bFlee);
+			if (bWork && strlen(pDev->szBindGuard)) {
 				strncpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard, strlen(pDev->szBindGuard));
 			}
 			if (pLbsLocateMsg_->usFlag == 1) {
@@ -3969,7 +3761,7 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
 
-		if (strlen(szGuarder)) {
+		if (bWork && strlen(szGuarder)) {
 			pthread_mutex_lock(&g_mutex4GuarderList);
 			Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
 			if (pGuarder) {
@@ -3978,17 +3770,6 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 				}
 			}
 			pthread_mutex_unlock(&g_mutex4GuarderList);
-		}
-
-		if (strlen(szTaskId)) {
-			pthread_mutex_lock(&g_mutex4TaskList);
-			if (zhash_size(g_taskList)) {
-				EscortTask * pTask = (EscortTask *)zhash_lookup(g_taskList, szTaskId);
-				if (pTask) {
-					nFleeFlag = (int)pTask->nTaskFlee;
-				}
-			}
-			pthread_mutex_unlock(&g_mutex4TaskList);
 		}
 
 		time_t nLocateTime = (time_t)pLbsLocateMsg_->ulMessageTime;
@@ -4008,7 +3789,8 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, "
 			"IsOut, RecordTime, Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, "
 			"%.06f, %u);", szLocateDbName, (int)escort_db::E_LOCATE_LBS, pLbsLocateMsg_->szDeviceId,
-			szTaskId, nFleeFlag, szSqlDatetime, pLbsLocateMsg_->dLat, pLbsLocateMsg_->dLng, usBattery);
+			bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime, pLbsLocateMsg_->dLat,
+			pLbsLocateMsg_->dLng, usBattery);
 		char szLocateSql2[256] = { 0 };
 		char szLocateDbName2[32] = { 0 };
 		snprintf(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d",
@@ -4016,7 +3798,8 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID,"
 			" IsOut, RecordTime, Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, "
 			"%.06f, %u);", szLocateDbName2, (int)escort_db::E_LOCATE_LBS, pLbsLocateMsg_->szDeviceId,
-			szTaskId, nFleeFlag, szSqlDatetime, pLbsLocateMsg_->dLat, pLbsLocateMsg_->dLng, usBattery);
+			bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime, pLbsLocateMsg_->dLat,
+			pLbsLocateMsg_->dLng, usBattery);
 		size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
 		unsigned long ulTime = (unsigned long)time(NULL);
 		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
@@ -4096,17 +3879,21 @@ int DbProxy::handleTopicBtLocateMsg(TopicLocateMessageBt * pBtLocateMsg_)
 		bool bLastest = false;
 		char szGuarder[20] = { 0 };
 		char szTaskId[12] = { 0 };
-		int nFleeFlag = 0;
+		bool bFlee = false;
+		bool bWork = false;
 		unsigned short usBattery = pBtLocateMsg_->usBattery;
 
 		pthread_mutex_lock(&g_mutex4DevList);
 		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, 
 			pBtLocateMsg_->szDeviceId);
 		if (pDev) {
+			bool bGuard = (pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD;
+			bFlee = (pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE;
+			bWork = (bGuard || bFlee);
 			if (usBattery == 0) {
 				usBattery = (unsigned short)pDev->deviceBasic.nBattery;
 			}
-			if (strlen(pDev->szBindGuard)) {
+			if (bWork && strlen(pDev->szBindGuard)) {
 				strncpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard, strlen(pDev->szBindGuard));
 			}
 			if (pDev->ulLastLocateTime < pBtLocateMsg_->ulMessageTime) {
@@ -4119,7 +3906,7 @@ int DbProxy::handleTopicBtLocateMsg(TopicLocateMessageBt * pBtLocateMsg_)
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
 
-		if (strlen(szGuarder)) {
+		if (bWork && strlen(szGuarder)) {
 			pthread_mutex_lock(&g_mutex4GuarderList);
 			Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
 			if (pGuarder) {
@@ -4128,17 +3915,6 @@ int DbProxy::handleTopicBtLocateMsg(TopicLocateMessageBt * pBtLocateMsg_)
 				}
 			}
 			pthread_mutex_unlock(&g_mutex4GuarderList);
-		}
-
-		if (strlen(szTaskId)) {
-			pthread_mutex_lock(&g_mutex4TaskList);
-			if (zhash_size(g_taskList)) {
-				EscortTask * pTask = (EscortTask *)zhash_lookup(g_taskList, szTaskId);
-				if (pTask) {
-					nFleeFlag = pTask->nTaskFlee;
-				}
-			}
-			pthread_mutex_unlock(&g_mutex4TaskList);
 		}
 
 		time_t nLocateTime = (time_t)pBtLocateMsg_->ulMessageTime;
@@ -4155,7 +3931,8 @@ int DbProxy::handleTopicBtLocateMsg(TopicLocateMessageBt * pBtLocateMsg_)
 		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, "
 			"IsOut, RecordTime, Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, "
 			"%.06f, %d);", szLocateDbName, escort_db::E_LOCATE_APP, pBtLocateMsg_->szDeviceId,
-			szTaskId, nFleeFlag, szSqlDatetime, pBtLocateMsg_->dLat, pBtLocateMsg_->dLng, usBattery);
+			bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime, pBtLocateMsg_->dLat,
+			pBtLocateMsg_->dLng, usBattery);
 		char szLocateDbName2[32] = { 0 };
 		snprintf(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d",
 			tm_locateTime.tm_mday);
@@ -4163,7 +3940,8 @@ int DbProxy::handleTopicBtLocateMsg(TopicLocateMessageBt * pBtLocateMsg_)
 		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID,"
 			" IsOut, RecordTime, Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, "
 			"%.06f, %d);", szLocateDbName2, escort_db::E_LOCATE_APP, pBtLocateMsg_->szDeviceId,
-			szTaskId, nFleeFlag, szSqlDatetime, pBtLocateMsg_->dLat, pBtLocateMsg_->dLng, usBattery);
+			bWork ? szTaskId : "", (bWork && bFlee) ? 1 : 0, szSqlDatetime, pBtLocateMsg_->dLat,
+			pBtLocateMsg_->dLng, usBattery);
 		size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
 		unsigned long ulTime = (unsigned long)time(NULL);
 		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
@@ -4198,40 +3976,40 @@ int DbProxy::handleTopicBtLocateMsg(TopicLocateMessageBt * pBtLocateMsg_)
 			pTransaction = NULL;
 		}
 
-		//if (bLastest) {
-		//	char szSqlNow[20] = { 0 };
-		//	format_sqldatetime(ulTime, szSqlNow, sizeof(szSqlNow));
-		//	char szDevSql[256] = { 0 };
-		//	snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastLocation='%s', Latitude="
-		//		"%.06f, Longitude=%.06f, LocationType=%d, Power=%u, Speed=0.0000, Coruse=0, LastOptTime='%s'"
-		//		" where DeviceID='%s';", szSqlDatetime, pBtLocateMsg_->dLat, pBtLocateMsg_->dLng, 
-		//		escort_db::E_LOCATE_APP, usBattery, szSqlNow, pBtLocateMsg_->szDeviceId);
-		//	dbproxy::SqlTransaction * pTransaction2 = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
-		//	pTransaction2->szTransactionFrom[0] = '\0';
-		//	pTransaction2->uiTransactionSequence = getNextInteractSequence();
-		//	pTransaction2->ulTransactionTime = ulTime;
-		//	pTransaction2->uiSqlCount = 1;
-		//	pTransaction2->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction2->uiSqlCount
-		//		* sizeof(dbproxy::SqlStatement));
-		//	pTransaction2->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_DEVICE;
-		//	size_t nDevSqlLen = strlen(szDevSql);
-		//	pTransaction2->pSqlList[0].ulStatementLen = nDevSqlLen;
-		//	pTransaction2->pSqlList[0].pStatement = (char *)zmalloc(nDevSqlLen + 1);
-		//	strncpy_s(pTransaction2->pSqlList[0].pStatement, nDevSqlLen + 1, szDevSql, nDevSqlLen);
-		//	pTransaction2->pSqlList[0].pStatement[nDevSqlLen] = '\0';
-		//	if (!addSqlTransaction(pTransaction2, SQLTYPE_EXECUTE)) {
-		//		for (unsigned int i = 0; i < pTransaction2->uiSqlCount; ++i) {
-		//			if (pTransaction2->pSqlList[i].pStatement) {
-		//				free(pTransaction2->pSqlList[i].pStatement);
-		//				pTransaction2->pSqlList[i].pStatement = NULL;
-		//			}
-		//		}
-		//		free(pTransaction2->pSqlList);
-		//		pTransaction2->pSqlList = NULL;
-		//		free(pTransaction2);
-		//		pTransaction2 = NULL;
-		//	}
-		//}
+		if (bLastest) {
+			char szSqlNow[20] = { 0 };
+			format_sqldatetime(ulTime, szSqlNow, sizeof(szSqlNow));
+			char szDevSql[256] = { 0 };
+			snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastLocation='%s', Latitude="
+				"%.06f, Longitude=%.06f, LocationType=%d, Power=%u, Speed=0.0000, Coruse=0, LastOptTime='%s'"
+				" where DeviceID='%s';", szSqlDatetime, pBtLocateMsg_->dLat, pBtLocateMsg_->dLng, 
+				escort_db::E_LOCATE_APP, usBattery, szSqlNow, pBtLocateMsg_->szDeviceId);
+			dbproxy::SqlTransaction * pTransaction2 = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
+			pTransaction2->szTransactionFrom[0] = '\0';
+			pTransaction2->uiTransactionSequence = getNextInteractSequence();
+			pTransaction2->ulTransactionTime = ulTime;
+			pTransaction2->uiSqlCount = 1;
+			pTransaction2->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction2->uiSqlCount
+				* sizeof(dbproxy::SqlStatement));
+			pTransaction2->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_DEVICE;
+			size_t nDevSqlLen = strlen(szDevSql);
+			pTransaction2->pSqlList[0].ulStatementLen = nDevSqlLen;
+			pTransaction2->pSqlList[0].pStatement = (char *)zmalloc(nDevSqlLen + 1);
+			strncpy_s(pTransaction2->pSqlList[0].pStatement, nDevSqlLen + 1, szDevSql, nDevSqlLen);
+			pTransaction2->pSqlList[0].pStatement[nDevSqlLen] = '\0';
+			if (!addSqlTransaction(pTransaction2, SQLTYPE_EXECUTE)) {
+				for (unsigned int i = 0; i < pTransaction2->uiSqlCount; ++i) {
+					if (pTransaction2->pSqlList[i].pStatement) {
+						free(pTransaction2->pSqlList[i].pStatement);
+						pTransaction2->pSqlList[i].pStatement = NULL;
+					}
+				}
+				free(pTransaction2->pSqlList);
+				pTransaction2->pSqlList = NULL;
+				free(pTransaction2);
+				pTransaction2 = NULL;
+			}
+		}
 		result = 0;
 	}
 	return result;
@@ -4800,11 +4578,6 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 							zmsg_send(&msg_reply, m_reception);
 							free(pFrameData);
 							pFrameData = NULL;
-							if (replyContainer.pStoreResult) {
-								free(replyContainer.pStoreResult);
-								replyContainer.pStoreResult = NULL;
-							}
-
 							return;
 						}
 						else {
@@ -4840,7 +4613,7 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 								pTransaction = NULL;
 							}
 							return;
-						}
+						}				
 					}
 					else { //query all device
 						pthread_mutex_lock(&g_mutex4DevList);
@@ -4867,7 +4640,7 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 							size_t nFrameDataLen = nContainerSize + nSize;
 							unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
 							memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nContainerSize);
-							memcpy_s(pFrameData + nContainerSize, nFrameDataLen - nContainerSize + 1,
+							memcpy_s(pFrameData + nContainerSize, nFrameDataLen - nContainerSize + 1, 
 								pDevList, nSize);
 							pFrameData[nFrameDataLen] = '\0';
 							zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
@@ -4880,63 +4653,46 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 							pFrameData = NULL;
 							free(pDevList);
 							pDevList = NULL;
-							free(replyContainer.pStoreResult);
-							replyContainer.pStoreResult = NULL;
 							bHitBuffer = true;
 						}
 						pthread_mutex_unlock(&g_mutex4DevList);
-						if (bHitBuffer) {
-							return;
-						}
-						else {
-							dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
-								nTransactionSize);
-							strncpy_s(pTransaction->szTransactionFrom, sizeof(pTransaction->szTransactionFrom),
-								pIdentity_, strlen(pIdentity_));
-							pTransaction->uiSqlCount = 1;
-							pTransaction->uiTransactionSequence = getNextInteractSequence();
-							pTransaction->ulTransactionTime = (unsigned long)time(NULL);
-							pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
-								* sizeof(dbproxy::SqlStatement));
-							char szSql[512] = { 0 };
-							snprintf(szSql, sizeof(szSql), "select DeviceID, FactoryID, OrgId, LastCommuncation, "
-								"LastLocation, Latitude, Longitude, LocationType, IsUse, Power, Online, IsRemove from "
-								"device_info order by DeviceID, FactoryID;");
-							size_t nSqlLen = strlen(szSql);
-							pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_DEVICE;
-							pTransaction->pSqlList[0].ulStatementLen = nSqlLen;
-							pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
-							memcpy_s(pTransaction->pSqlList[0].pStatement, nSqlLen + 1, szSql, nSqlLen);
-							pTransaction->pSqlList[0].pStatement[nSqlLen] = '\0';
-							if (!addSqlTransaction(pTransaction, SQLTYPE_QUERY)) {
-								for (unsigned int i = 0; i < pTransaction->uiSqlCount; i++) {
-									if (pTransaction->pSqlList[i].pStatement) {
-										free(pTransaction->pSqlList[i].pStatement);
-										pTransaction->pSqlList[i].pStatement = NULL;
-									}
+					}
+					if (bHitBuffer) {
+						return;
+					}
+					else {
+						dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
+							nTransactionSize);
+						strncpy_s(pTransaction->szTransactionFrom, sizeof(pTransaction->szTransactionFrom),
+							pIdentity_, strlen(pIdentity_));
+						pTransaction->uiSqlCount = 1;
+						pTransaction->uiTransactionSequence = getNextInteractSequence();
+						pTransaction->ulTransactionTime = (unsigned long)time(NULL);
+						pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
+							* sizeof(dbproxy::SqlStatement));
+						char szSql[512] = { 0 };
+						snprintf(szSql, sizeof(szSql), "select DeviceID, FactoryID, OrgId, LastCommuncation, "
+							"LastLocation, Latitude, Longitude, LocationType, IsUse, Power, Online, IsRemove from "
+							"device_info order by DeviceID, FactoryID;");
+						size_t nSqlLen = strlen(szSql);
+						pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_DEVICE;
+						pTransaction->pSqlList[0].ulStatementLen = nSqlLen;
+						pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
+						memcpy_s(pTransaction->pSqlList[0].pStatement, nSqlLen + 1, szSql, nSqlLen);
+						pTransaction->pSqlList[0].pStatement[nSqlLen] = '\0';
+						if (!addSqlTransaction(pTransaction, SQLTYPE_QUERY)) {
+							for (unsigned int i = 0; i < pTransaction->uiSqlCount; i++) {
+								if (pTransaction->pSqlList[i].pStatement) {
+									free(pTransaction->pSqlList[i].pStatement);
+									pTransaction->pSqlList[i].pStatement = NULL;
 								}
-								free(pTransaction->pSqlList);
-								pTransaction->pSqlList = NULL;
-								free(pTransaction);
-								pTransaction = NULL;
-								replyContainer.uiResultCount = 0;
-								replyContainer.uiResultLen = 0;
-								replyContainer.pStoreResult = NULL;
-								zframe_t * frame_identity = zframe_from(pIdentity_);
-								zframe_t * frame_empty = zframe_new(NULL, 0);
-								size_t nFrameDataLen = sizeof(replyContainer);
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nFrameDataLen);
-								pFrameData[nFrameDataLen] = '\0';
-								zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_t * msg_reply = zmsg_new();
-								zmsg_append(msg_reply, &frame_identity);
-								zmsg_append(msg_reply, &frame_empty);
-								zmsg_append(msg_reply, &frame_body);
-								zmsg_send(&msg_reply, m_reception);
 							}
-							return;
+							free(pTransaction->pSqlList);
+							pTransaction->pSqlList = NULL;
+							free(pTransaction);
+							pTransaction = NULL;
 						}
+						return;
 					}
 				}
 				else if (pContainer_->usSqlOptType == escort_db::E_OPT_DELETE) {
@@ -4948,6 +4704,10 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 					if (pDevice) {
 						escort_db::SqlContainer replyContainer;
 						replyContainer.uiResultCount = 1;
+						replyContainer.uiSqlOptSeq = pContainer_->uiSqlOptSeq;
+						replyContainer.ulSqlOptTime = pContainer_->ulSqlOptTime;
+						replyContainer.usSqlOptTarget = pContainer_->usSqlOptTarget;
+						replyContainer.usSqlOptType = pContainer_->usSqlOptType;
 						size_t nDeviceSize = sizeof(WristletDevice);
 						replyContainer.pStoreResult = (unsigned char *)zmalloc(nDeviceSize + 1);
 						replyContainer.uiResultLen = nDeviceSize;
@@ -4961,10 +4721,8 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 							replyContainer.pStoreResult, replyContainer.uiResultLen);
 						zmsg_t * msg_reply = zmsg_new();
 						zframe_t * frame_identity = zframe_from(pIdentity_);
-						zframe_t * frame_empty = zframe_new(NULL, 0);
 						zframe_t * frame_reply = zframe_new(pFrameData, nFrameDataLen);
 						zmsg_append(msg_reply, &frame_identity);
-						zmsg_append(msg_reply, &frame_empty);
 						zmsg_append(msg_reply, &frame_reply);
 						zmsg_send(&msg_reply, m_reception);
 						free(pFrameData);
@@ -4977,14 +4735,16 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 						replyContainer.uiResultCount = 0;
 						replyContainer.uiResultLen = 0;
 						replyContainer.pStoreResult = NULL;
+						replyContainer.uiSqlOptSeq = pContainer_->uiSqlOptSeq;
+						replyContainer.ulSqlOptTime = pContainer_->ulSqlOptTime;
+						replyContainer.usSqlOptTarget = pContainer_->usSqlOptTarget;
+						replyContainer.usSqlOptType = pContainer_->usSqlOptType;
 						strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey),
 							pContainer_->szSqlOptKey, strlen(pContainer_->szSqlOptKey));
 						zmsg_t * msg_reply = zmsg_new();
 						zframe_t * frame_identity = zframe_from(pIdentity_);
-						zframe_t * frame_empty = zframe_new(NULL, 0);
 						zframe_t * frame_reply = zframe_new(&replyContainer, sizeof(escort_db::SqlContainer));
 						zmsg_append(msg_reply, &frame_identity);
-						zmsg_append(msg_reply, &frame_empty);
 						zmsg_append(msg_reply, &frame_reply);
 						zmsg_send(&msg_reply, m_reception);
 					}
@@ -5063,21 +4823,6 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 								pTransaction->pSqlList = NULL;
 								free(pTransaction);
 								pTransaction = NULL;
-								replyContainer.uiResultCount = 0;
-								replyContainer.uiResultLen = 0;
-								replyContainer.pStoreResult = NULL;
-								zframe_t * frame_identity = zframe_from(pIdentity_);
-								zframe_t * frame_empty = zframe_new(NULL, 0);
-								size_t nFrameDataLen = sizeof(replyContainer);
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nFrameDataLen);
-								pFrameData[nFrameDataLen] = '\0';
-								zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_t * msg_reply = zmsg_new();
-								zmsg_append(msg_reply, &frame_identity);
-								zmsg_append(msg_reply, &frame_empty);
-								zmsg_append(msg_reply, &frame_body);
-								zmsg_send(&msg_reply, m_reception);
 							}
 							return;
 						}
@@ -5173,6 +4918,10 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 					replyContainer.uiResultLen = 0;
 					strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey),
 						pContainer_->szSqlOptKey, strlen(pContainer_->szSqlOptKey));
+					replyContainer.uiSqlOptSeq = pContainer_->uiSqlOptSeq;
+					replyContainer.ulSqlOptTime = pContainer_->ulSqlOptTime;
+					replyContainer.usSqlOptTarget = pContainer_->usSqlOptTarget;
+					replyContainer.usSqlOptType = pContainer_->usSqlOptType;
 					zmsg_t * msg_reply = zmsg_new();
 					zframe_t * frame_identity = zframe_from(pIdentity_);
 					zframe_t * frame_empty = zframe_new(NULL, 0);
@@ -5187,6 +4936,10 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 					replyContainer.pStoreResult = NULL;
 					replyContainer.uiResultCount = 0;
 					replyContainer.uiResultLen = 0;
+					replyContainer.uiSqlOptSeq = pContainer_->uiSqlOptSeq;
+					replyContainer.ulSqlOptTime = pContainer_->ulSqlOptTime;
+					replyContainer.usSqlOptTarget = pContainer_->usSqlOptTarget;
+					replyContainer.usSqlOptType = pContainer_->usSqlOptType;
 					replyContainer.szSqlOptKey[0] = '\0';
 					zmsg_t * msg_reply = zmsg_new();
 					zframe_t * frame_identity = zframe_from(pIdentity_);
@@ -5324,21 +5077,6 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 								pTransaction->pSqlList = NULL;
 								free(pTransaction);
 								pTransaction = NULL;
-								replyContainer.uiResultCount = 0;
-								replyContainer.uiResultLen = 0;
-								replyContainer.pStoreResult = NULL;
-								zframe_t * frame_identity = zframe_from(pIdentity_);
-								zframe_t * frame_empty = zframe_new(NULL, 0);
-								size_t nFrameDataLen = sizeof(replyContainer);
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nFrameDataLen);
-								pFrameData[nFrameDataLen] = '\0';
-								zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_t * msg_reply = zmsg_new();
-								zmsg_append(msg_reply, &frame_identity);
-								zmsg_append(msg_reply, &frame_empty);
-								zmsg_append(msg_reply, &frame_body);
-								zmsg_send(&msg_reply, m_reception);
 							}
 							return;
 						}
@@ -5416,21 +5154,6 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 								pTransaction->pSqlList = NULL;
 								free(pTransaction);
 								pTransaction = NULL;
-								replyContainer.uiResultCount = 0;
-								replyContainer.uiResultLen = 0;
-								replyContainer.pStoreResult = NULL;
-								zframe_t * frame_identity = zframe_from(pIdentity_);
-								zframe_t * frame_empty = zframe_new(NULL, 0);
-								size_t nFrameDataLen = sizeof(replyContainer);
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nFrameDataLen);
-								pFrameData[nFrameDataLen] = '\0';
-								zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_t * msg_reply = zmsg_new();
-								zmsg_append(msg_reply, &frame_identity);
-								zmsg_append(msg_reply, &frame_empty);
-								zmsg_append(msg_reply, &frame_body);
-								zmsg_send(&msg_reply, m_reception);
 							}
 							return;
 						}
@@ -5452,10 +5175,8 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 					replyContainer.usSqlOptType = pContainer_->usSqlOptType;
 					zmsg_t * msg_reply = zmsg_new();
 					zframe_t * frame_identity = zframe_from(pIdentity_);
-					zframe_t * frame_empty = zframe_new(NULL, 0);
 					zframe_t * frame_reply = zframe_new(&replyContainer, sizeof(replyContainer));
 					zmsg_append(msg_reply, &frame_identity);
-					zmsg_append(msg_reply, &frame_empty);
 					zmsg_append(msg_reply, &frame_reply);
 					zmsg_send(&msg_reply, m_reception);
 				}
@@ -5472,10 +5193,8 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 					replyContainer.usSqlOptTarget = pContainer_->usSqlOptTarget;
 					zmsg_t * msg_reply = zmsg_new();
 					zframe_t * frame_identity = zframe_from(pIdentity_);
-					zframe_t * frame_empty = zframe_new(NULL, 0);
 					zframe_t * frame_reply = zframe_new(&replyContainer, sizeof(replyContainer));
 					zmsg_append(msg_reply, &frame_identity);
-					zmsg_append(msg_reply, &frame_empty);
 					zmsg_append(msg_reply, &frame_reply);
 					zmsg_send(&msg_reply, m_reception);
 					if (strlen(pContainer_->szSqlOptKey) && pContainer_->uiResultLen && pContainer_->pStoreResult
@@ -5576,21 +5295,6 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 								pTransaction->pSqlList = NULL;
 								free(pTransaction);
 								pTransaction = NULL;
-								replyContainer.uiResultCount = 0;
-								replyContainer.uiResultLen = 0;
-								replyContainer.pStoreResult = NULL;
-								zframe_t * frame_identity = zframe_from(pIdentity_);
-								zframe_t * frame_empty = zframe_new(NULL, 0);
-								size_t nFrameDataLen = sizeof(replyContainer);
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nFrameDataLen);
-								pFrameData[nFrameDataLen] = '\0';
-								zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_t * msg_reply = zmsg_new();
-								zmsg_append(msg_reply, &frame_identity);
-								zmsg_append(msg_reply, &frame_empty);
-								zmsg_append(msg_reply, &frame_body);
-								zmsg_send(&msg_reply, m_reception);
 							}
 						}
 						return;
@@ -5669,441 +5373,14 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 								pTransaction->pSqlList = NULL;
 								free(pTransaction);
 								pTransaction = NULL;
-								replyContainer.uiResultCount = 0;
-								replyContainer.uiResultLen = 0;
-								replyContainer.pStoreResult = NULL;
-								zframe_t * frame_identity = zframe_from(pIdentity_);
-								zframe_t * frame_empty = zframe_new(NULL, 0);
-								size_t nFrameDataLen = sizeof(replyContainer);
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nFrameDataLen);
-								pFrameData[nFrameDataLen] = '\0';
-								zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_t * msg_reply = zmsg_new();
-								zmsg_append(msg_reply, &frame_identity);
-								zmsg_append(msg_reply, &frame_empty);
-								zmsg_append(msg_reply, &frame_body);
-								zmsg_send(&msg_reply, m_reception);
 							}
 							return;
 						}
 					}
-				}
-				else if (pContainer_->usSqlOptType == escort_db::E_OPT_DELETE) {
-
-				}
-				else if (pContainer_->usSqlOptType == escort_db::E_OPT_UPDATE) {
-
 				}
 				break;
 			}
 			case escort_db::E_TBL_MESSAGE: {
-				break;
-			}
-			case escort_db::E_TBL_FENCE: {
-				if (pContainer_->usSqlOptType == escort_db::E_OPT_QUERY) {
-					char szFenceId[10];
-					if (strlen(pContainer_->szSqlOptKey)) {
-						strncpy_s(szFenceId, sizeof(szFenceId), pContainer_->szSqlOptKey, 
-							strlen(pContainer_->szSqlOptKey));
-						pthread_mutex_lock(&g_mutex4FenceList);
-						EscortFence * pFence = (EscortFence *)zhash_lookup(g_fenceList, szFenceId);
-						if (pFence) {
-							strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey),
-								szFenceId, strlen(szFenceId));
-							replyContainer.uiResultCount = 1;
-							size_t nFenceSize = sizeof(EscortFence);
-							replyContainer.uiResultLen = nFenceSize * replyContainer.uiResultCount;
-							replyContainer.pStoreResult = (unsigned char *)zmalloc(replyContainer.uiResultLen + 1);
-							memcpy_s(replyContainer.pStoreResult, replyContainer.uiResultLen, pFence, nFenceSize);
-							replyContainer.pStoreResult[replyContainer.uiResultLen] = '\0';
-							bHitBuffer = true;
-						}
-						pthread_mutex_unlock(&g_mutex4FenceList);
-						if (bHitBuffer) {
-							unsigned int uiFrameLen = nContainerSize + replyContainer.uiResultLen;
-							unsigned char * pFrameData = (unsigned char *)zmalloc(uiFrameLen + 1);
-							memcpy_s(pFrameData, nContainerSize, &replyContainer, nContainerSize);
-							memcpy_s(pFrameData + nContainerSize, replyContainer.uiResultLen + 1,
-								replyContainer.pStoreResult, replyContainer.uiResultLen);
-							pFrameData[uiFrameLen] = '\0';
-							zframe_t * frame_identity = zframe_from(pIdentity_);
-							zframe_t * frame_empty = zframe_new(NULL, 0);
-							zframe_t * frame_reply = zframe_new(pFrameData, uiFrameLen);
-							zmsg_t * msg_reply = zmsg_new();
-							zmsg_append(msg_reply, &frame_identity);
-							zmsg_append(msg_reply, &frame_empty);
-							zmsg_append(msg_reply, &frame_reply);
-							zmsg_send(&msg_reply, m_reception);
-							free(pFrameData);
-							pFrameData = NULL;
-							return;
-						}
-						else {
-							dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
-								nTransactionSize);
-							strncpy_s(pTransaction->szTransactionFrom, sizeof(pTransaction->szTransactionFrom),
-								pIdentity_, strlen(pIdentity_));
-							pTransaction->uiTransactionSequence = getNextInteractSequence();
-							pTransaction->ulTransactionTime = (unsigned long)time(NULL);
-							pTransaction->uiSqlCount = 1;
-							pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
-								* sizeof(dbproxy::SqlStatement));
-							char szSql[512] = { 0 };
-							snprintf(szSql, sizeof(szSql), "select fenceId, fenceType, fenceContent, activeFlag "
-								"from fence_info where fenceId=%s;", szFenceId);
-							size_t nSqlLen = strlen(szSql);
-							pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_FENCE;
-							pTransaction->pSqlList[0].ulStatementLen = nSqlLen;
-							pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
-							memcpy_s(pTransaction->pSqlList[0].pStatement, nSqlLen + 1, szSql, nSqlLen);
-							pTransaction->pSqlList[0].pStatement[nSqlLen] = '\0';
-							if (!addSqlTransaction(pTransaction, SQLTYPE_QUERY)) {
-								if (pTransaction->pSqlList) {
-									free(pTransaction->pSqlList);
-									pTransaction->pSqlList = NULL;
-								}
-								free(pTransaction);
-								pTransaction = NULL;
-								replyContainer.uiResultCount = 0;
-								replyContainer.uiResultLen = 0;
-								replyContainer.pStoreResult = NULL;
-								zframe_t * frame_identity = zframe_from(pIdentity_);
-								zframe_t * frame_empty = zframe_new(NULL, 0);
-								size_t nFrameDataLen = sizeof(replyContainer);
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nFrameDataLen);
-								pFrameData[nFrameDataLen] = '\0';
-								zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_t * msg_reply = zmsg_new();
-								zmsg_append(msg_reply, &frame_identity);
-								zmsg_append(msg_reply, &frame_empty);
-								zmsg_append(msg_reply, &frame_body);
-								zmsg_send(&msg_reply, m_reception);
-							}
-							return;
-						}
-					}
-					else {
-						pthread_mutex_lock(&g_mutex4FenceList);
-						size_t nCellCount = zhash_size(g_fenceList);
-						size_t nFenceSize = sizeof(EscortFence);
-						size_t nSize = nFenceSize * nCellCount;
-						if (nCellCount) {
-							EscortFence * pFenceList = (EscortFence *)zmalloc(nSize);
-							EscortFence * pCellFence = (EscortFence *)zhash_first(g_fenceList);
-							size_t i = 0;
-							while (pCellFence) {
-								memcpy_s(&pFenceList[i], nFenceSize, pCellFence, nFenceSize);
-								pCellFence = (EscortFence *)zhash_next(g_fenceList);
-								i++;
-							}
-							replyContainer.uiResultCount = nCellCount;
-							replyContainer.uiResultLen = nSize;
-							replyContainer.pStoreResult = (unsigned char *)zmalloc(nSize + 1);
-							memcpy_s(replyContainer.pStoreResult, nSize + 1, pFenceList, nSize);
-							replyContainer.pStoreResult[nSize] = '\0';
-							size_t nContainerSize = sizeof(escort_db::SqlContainer);
-							zframe_t * frame_identity = zframe_from(pIdentity_);
-							zframe_t * frame_empty = zframe_new(NULL, 0);
-							unsigned int uiFrameDataLen = nContainerSize + nSize;
-							unsigned char * pFrameData = (unsigned char *)zmalloc(uiFrameDataLen + 1);
-							zframe_t * frame_reply = zframe_new(pFrameData, uiFrameDataLen);
-							zmsg_t * msg_reply = zmsg_new();
-							zmsg_append(msg_reply, &frame_identity);
-							zmsg_append(msg_reply, &frame_empty);
-							zmsg_append(msg_reply, &frame_reply);
-							zmsg_send(&msg_reply, m_reception);
-							bHitBuffer = true;
-							free(pFrameData);
-							pFrameData = NULL;
-						}
-						pthread_mutex_unlock(&g_mutex4FenceList);
-						if (bHitBuffer) {
-							return;
-						}
-						else {
-							dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
-								nTransactionSize);
-							strncpy_s(pTransaction->szTransactionFrom, sizeof(pTransaction->szTransactionFrom),
-								pIdentity_, strlen(pIdentity_));
-							pTransaction->uiSqlCount = 1;
-							pTransaction->uiTransactionSequence = getNextInteractSequence();
-							pTransaction->ulTransactionTime = (unsigned long)time(NULL);
-							pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
-								* sizeof(dbproxy::SqlStatement));
-							char szSql[512] = { 0 };
-							snprintf(szSql, sizeof(szSql), "select fenceId, fenceType, fenceContent, activeFlag from "
-								"fence_info order by fenceId desc;");
-							size_t nSqlLen = strlen(szSql);
-							pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_FENCE;
-							pTransaction->pSqlList[0].ulStatementLen = nSqlLen;
-							pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
-							memcpy_s(pTransaction->pSqlList[0].pStatement, nSqlLen + 1, szSql, nSqlLen);
-							pTransaction->pSqlList[0].pStatement[nSqlLen] = '\0';
-							if (!addSqlTransaction(pTransaction, SQLTYPE_QUERY)) {
-								if (pTransaction->pSqlList) {
-									free(pTransaction->pSqlList);
-									pTransaction->pSqlList = NULL;
-								}
-								free(pTransaction);
-								pTransaction = NULL;
-								replyContainer.uiResultCount = 0;
-								replyContainer.uiResultLen = 0;
-								replyContainer.pStoreResult = NULL;
-								zframe_t * frame_identity = zframe_from(pIdentity_);
-								zframe_t * frame_empty = zframe_new(NULL, 0);
-								size_t nFrameDataLen = sizeof(replyContainer);
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nFrameDataLen);
-								pFrameData[nFrameDataLen] = '\0';
-								zframe_t * frame_body = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_t * msg_reply = zmsg_new();
-								zmsg_append(msg_reply, &frame_identity);
-								zmsg_append(msg_reply, &frame_empty);
-								zmsg_append(msg_reply, &frame_body);
-								zmsg_send(&msg_reply, m_reception);
-							}
-							return;
-						}
-					}
-				}
-				else if (pContainer_->usSqlOptType == escort_db::E_OPT_UPDATE) {
-					char szFenceId[10] = { 0 };
-					if (strlen(pContainer_->szSqlOptKey) && pContainer_->uiResultLen && pContainer_->uiResultCount == 1
-						&& pContainer_->pStoreResult) {
-						strncpy_s(szFenceId, sizeof(szFenceId), pContainer_->szSqlOptKey,
-							strlen(pContainer_->szSqlOptKey));
-						size_t nFenceSize = sizeof(EscortFence);
-						if (pContainer_->uiResultLen >= nFenceSize) {
-							EscortFence * pDstFence = (EscortFence *)zmalloc(nFenceSize);
-							memcpy_s(pDstFence, nFenceSize, pContainer_->pStoreResult, nFenceSize);
-							pthread_mutex_lock(&g_mutex4FenceList);
-							zhash_update(g_fenceList, szFenceId, pDstFence);
-							zhash_freefn(g_fenceList, szFenceId, free);
-							pthread_mutex_unlock(&g_mutex4FenceList);
-							bHitBuffer = true;
-							replyContainer.pStoreResult = NULL;
-							replyContainer.uiResultCount = 0;
-							replyContainer.uiResultLen = 0;
-							strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey), szFenceId,
-								strlen(szFenceId));
-							zframe_t * frame_identity = zframe_from(pIdentity_);
-							zframe_t * frame_empty = zframe_new(NULL, 0);
-							zframe_t * frame_reply = zframe_new(&replyContainer, sizeof(replyContainer));
-							zmsg_t * msg_reply = zmsg_new();
-							zmsg_append(msg_reply, &frame_identity);
-							zmsg_append(msg_reply, &frame_empty);
-							zmsg_append(msg_reply, &frame_reply);
-							zmsg_send(&msg_reply, m_reception);
-							return;
-						}
-					}
-				}
-				else if (pContainer_->usSqlOptType == escort_db::E_OPT_DELETE) {
-					char szFenceId[10] = { 0 };
-					if (strlen(pContainer_->szSqlOptKey)) {
-						strncpy_s(szFenceId, sizeof(szFenceId), pContainer_->szSqlOptKey, strlen(pContainer_->szSqlOptKey));
-						strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey), szFenceId, 
-							strlen(szFenceId));
-						pthread_mutex_lock(&g_mutex4FenceList);
-						zhash_delete(g_fenceList, szFenceId);
-						pthread_mutex_unlock(&g_mutex4FenceList);
-					}
-				}
-				break;
-			}
-			case escort_db::E_TBL_TASK_FENCE: {
-				if (pContainer_->usSqlOptType == escort_db::E_OPT_QUERY) {
-					if (strlen(pContainer_->szSqlOptKey)) { //query one
-						char szFenceTaskId[10] = { 0 };
-						strncpy_s(szFenceTaskId, sizeof(szFenceTaskId), pContainer_->szSqlOptKey,
-							strlen(pContainer_->szSqlOptKey));
-						pthread_mutex_lock(&g_mutex4FenceTaskList);
-						EscortFenceTask * pFenceTask = (EscortFenceTask *)zhash_lookup(g_fenceTaskList, szFenceTaskId);
-						if (pFenceTask) {
-							size_t nFenceTaskSize = sizeof(EscortFenceTask);
-							replyContainer.uiResultCount = 1;
-							replyContainer.uiResultLen = nFenceTaskSize;
-							replyContainer.pStoreResult = (unsigned char *)zmalloc(replyContainer.uiResultLen + 1);
-							strcpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey), szFenceTaskId);
-							zframe_t * frame_identity = zframe_from(pIdentity_);
-							zframe_t * frame_empty = zframe_new(NULL, 0);
-							zframe_t * frame_reply = zframe_new(&replyContainer, sizeof(replyContainer));
-							zmsg_t * msg_reply = zmsg_new();
-							zmsg_append(msg_reply, &frame_identity);
-							zmsg_append(msg_reply, &frame_empty);
-							zmsg_append(msg_reply, &frame_reply);
-							zmsg_send(&msg_reply, m_reception);
-							bHitBuffer = true;
-						}
-						pthread_mutex_unlock(&g_mutex4FenceTaskList);
-						if (bHitBuffer) {
-							return;
-						}
-						else {
-							size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
-							dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
-							char szSql[256] = { 0 };
-							snprintf(szSql, sizeof(szSql), "select fenceTaskId, fenceId, factoryId, deviceId, startTime "
-								"from fence_task_info where taskState = 0 and fenceTaskId=%s;", szFenceTaskId);
-							size_t nSqlLen = strlen(szSql);
-							pTransaction->uiSqlCount = 1;
-							pTransaction->uiTransactionSequence = getNextInteractSequence();
-							pTransaction->ulTransactionTime = (unsigned long)time(NULL);
-							strncpy_s(pTransaction->szTransactionFrom, sizeof(pTransaction->szTransactionFrom),
-								pIdentity_, strlen(pIdentity_));
-							pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(sizeof(dbproxy::SqlStatement));
-							pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_TASK_FENCE;
-							pTransaction->pSqlList[0].ulStatementLen = nSqlLen;
-							pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
-							memcpy_s(pTransaction->pSqlList[0].pStatement, nSqlLen + 1, szSql, nSqlLen);
-							pTransaction->pSqlList[0].pStatement[nSqlLen] = '\0';
-							if (addSqlTransaction(pTransaction, SQLTYPE_QUERY)) {
-								return;
-							}
-							else {
-								if (pTransaction) {
-									if (pTransaction->pSqlList) {
-										free(pTransaction->pSqlList);
-										pTransaction->pSqlList = NULL;
-										pTransaction->uiSqlCount = 0;
-									}
-									free(pTransaction);
-									pTransaction = NULL;
-								}
-							}
-						}
-					}
-					else { //query all
-						pthread_mutex_lock(&g_mutex4FenceTaskList);
-						size_t nCellCount = zhash_size(g_fenceTaskList);
-						if (nCellCount > 0) {
-							size_t nCellSize = sizeof(EscortFenceTask);
-							size_t nSize = nCellSize * nCellCount;
-							EscortFenceTask * pFenceTaskList = (EscortFenceTask *)zmalloc(nSize);
-							EscortFenceTask * pFenceTaskCell = (EscortFenceTask *)zhash_first(g_fenceTaskList);
-							size_t i = 0;
-							while (pFenceTaskCell) {
-								memcpy_s(&pFenceTaskList[i], nCellSize, pFenceTaskCell, nCellSize);
-								pFenceTaskCell = (EscortFenceTask *)zhash_next(g_fenceTaskList);
-								i++;
-							}
-							replyContainer.uiResultCount = nCellCount;
-							replyContainer.uiResultLen = nSize;
-							replyContainer.pStoreResult = (unsigned char *)zmalloc(nSize + 1);
-							memcpy_s(replyContainer.pStoreResult, nSize + 1, pFenceTaskList, nSize);
-							replyContainer.pStoreResult[nSize] = '\0';
-							size_t nContainerSize = sizeof(replyContainer);
-							size_t nFrameDataLen = nContainerSize + nSize;
-							unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-							memcpy_s(pFrameData, nFrameDataLen + 1, &replyContainer, nContainerSize);
-							memcpy_s(pFrameData + nContainerSize, nSize + 1, replyContainer.pStoreResult, nSize);
-							pFrameData[nContainerSize] = '\0';
-							zframe_t *frame_identity = zframe_from(pIdentity_);
-							zframe_t * frame_empty = zframe_new(NULL, 0);
-							zframe_t * frame_reply = zframe_new(pFrameData, nFrameDataLen);
-							zmsg_t * msg_reply = zmsg_new();
-							zmsg_append(msg_reply, &frame_identity);
-							zmsg_append(msg_reply, &frame_empty);
-							zmsg_append(msg_reply, &frame_reply);
-							zmsg_send(&msg_reply, m_reception);
-							if (pFrameData) {
-								free(pFrameData);
-								pFrameData = NULL;
-							}
-							if (replyContainer.pStoreResult) {
-								free(replyContainer.pStoreResult);
-								replyContainer.pStoreResult = NULL;
-							}
-							if (pFenceTaskList) {
-								free(pFenceTaskList);
-								pFenceTaskList = NULL;
-							}
-							bHitBuffer = true;
-						}
-						pthread_mutex_unlock(&g_mutex4FenceTaskList);
-						if (bHitBuffer) {
-							return;
-						}
-						else {
-							size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
-							dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
-							char szSql[256] = { 0 };
-							snprintf(szSql, sizeof(szSql), "select fenceTaskId, fenceId, factoryId, deviceId, startTime "
-								"from fence_task_info where taskState = 0 order by fenceTaskId desc;");
-							size_t nSqlLen = strlen(szSql);
-							pTransaction->uiSqlCount = 1;
-							pTransaction->uiTransactionSequence = getNextInteractSequence();
-							pTransaction->ulTransactionTime = (unsigned long)time(NULL);
-							strncpy_s(pTransaction->szTransactionFrom, sizeof(pTransaction->szTransactionFrom),
-								pIdentity_, strlen(pIdentity_));
-							pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(sizeof(dbproxy::SqlStatement));
-							pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_TASK_FENCE;
-							pTransaction->pSqlList[0].ulStatementLen = nSqlLen;
-							pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
-							memcpy_s(pTransaction->pSqlList[0].pStatement, nSqlLen + 1, szSql, nSqlLen);
-							pTransaction->pSqlList[0].pStatement[nSqlLen] = '\0';
-							if (addSqlTransaction(pTransaction, SQLTYPE_QUERY)) {
-								return;
-							}
-							else {
-								if (pTransaction) {
-									if (pTransaction->pSqlList) {
-										free(pTransaction->pSqlList);
-										pTransaction->pSqlList = NULL;
-										pTransaction->uiSqlCount = 0;
-									}
-									free(pTransaction);
-									pTransaction = NULL;
-								}
-							}
-						}
-					}
-				}
-				else if (pContainer_->usSqlOptType == escort_db::E_OPT_UPDATE) {
-					char szFenceTaskId[10] = { 0 };
-					if (strlen(pContainer_->szSqlOptKey) && pContainer_->uiResultCount == 1 
-						&& pContainer_->uiResultLen && pContainer_->pStoreResult) {
-						strncpy_s(szFenceTaskId, sizeof(szFenceTaskId), pContainer_->szSqlOptKey, 
-							strlen(pContainer_->szSqlOptKey));
-						size_t nFenceTaskSize = sizeof(EscortFenceTask);
-						if (pContainer_->uiResultLen >= nFenceTaskSize) {
-							EscortFenceTask * pFenceTask = (EscortFenceTask *)zmalloc(nFenceTaskSize);
-							memcpy_s(pFenceTask, nFenceTaskSize, pContainer_->pStoreResult, nFenceTaskSize);
-							pthread_mutex_lock(&g_mutex4FenceTaskList);
-							zhash_update(g_fenceTaskList, szFenceTaskId, pFenceTask);
-							zhash_freefn(g_fenceTaskList, szFenceTaskId, free);
-							pthread_mutex_unlock(&g_mutex4FenceTaskList);
-							replyContainer.pStoreResult = NULL;
-							replyContainer.uiResultCount = 0;
-							replyContainer.uiResultLen = 0;
-							strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey), szFenceTaskId,
-								strlen(szFenceTaskId));
-							zframe_t * frame_identity = zframe_from(pIdentity_);
-							zframe_t * frame_empty = zframe_new(NULL, 0);
-							zframe_t * frame_reply = zframe_new(&replyContainer, sizeof(replyContainer));
-							zmsg_t * msg_reply = zmsg_new();
-							zmsg_append(msg_reply, &frame_identity);
-							zmsg_append(msg_reply, &frame_empty);
-							zmsg_append(msg_reply, &frame_reply);
-							zmsg_send(&msg_reply, m_reception);
-							return;
-						}
-					}
-				}
-				else if (pContainer_->usSqlOptType == escort_db::E_OPT_DELETE) {
-					char szFenceTaskId[10] = { 0 };
-					if (strlen(pContainer_->szSqlOptKey)) {
-						strncpy_s(szFenceTaskId, sizeof(szFenceTaskId), pContainer_->szSqlOptKey, 
-							strlen(pContainer_->szSqlOptKey));
-						strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey), szFenceTaskId,
-							strlen(szFenceTaskId));
-						pthread_mutex_lock(&g_mutex4FenceTaskList);
-						zhash_delete(g_fenceTaskList, szFenceTaskId);
-						pthread_mutex_unlock(&g_mutex4FenceTaskList);
-					}
-				}
 				break;
 			}
 			default: {
@@ -6148,14 +5425,14 @@ bool DbProxy::makePerson(const char * pSrc_, Person * pDest_)
 				}
 				else {
 					strncpy_s(pDest_->szPersonId, sizeof(pDest_->szPersonId), foreStr.c_str(),
-						sizeof(pDest_->szPersonId) - 1);
+						sizeof(pDest_->szPersonId));
 				}
 				if (nBackStrSize < sizeof(pDest_->szPersonName)) {
 					strncpy_s(pDest_->szPersonName, sizeof(pDest_->szPersonName), backStr.c_str(), nBackStrSize);
 				}
 				else {
 					strncpy_s(pDest_->szPersonName, sizeof(pDest_->szPersonName), backStr.c_str(),
-						sizeof(pDest_->szPersonName) - 1);
+						sizeof(pDest_->szPersonName));
 				}
 			}
 		}
@@ -6167,7 +5444,7 @@ bool DbProxy::makePerson(const char * pSrc_, Person * pDest_)
 				}
 				else {
 					strncpy_s(pDest_->szPersonId, sizeof(pDest_->szPersonId), str.c_str(),
-						sizeof(pDest_->szPersonId) - 1);
+						sizeof(pDest_->szPersonId));
 				}
 			}
 		}
@@ -6337,28 +5614,21 @@ bool DbProxy::initSqlBuffer()
 	char szDeviceSql[512] = { 0 };//3
 	char szGuarderSql[512] = { 0 };//4
 	char szTaskSql[512] = { 0 };//5
-	char szFenceSql[512] = { 0 };//6
-	char szFenceTaskSql[512] = { 0 };//7
 	snprintf(szPersonSql, sizeof(szPersonSql), "select PersonID, PersonName, IsEscorting from "
 		"person_info order by PersonID;");
 	snprintf(szOrgSql, sizeof(szOrgSql), "select OrgID, OrgName, ParentID from org_info order by OrgID;");
 	snprintf(szDeviceSql, sizeof(szDeviceSql), "select DeviceID, FactoryID, OrgId, LastCommuncation, "
 		"LastLocation, Latitude, Longitude, LocationType, IsUse, Power, Online, IsRemove from "
 		"device_info order by DeviceID, FactoryID;");
-	snprintf(szGuarderSql, sizeof(szGuarderSql), "select UserID, UserName, Password, OrgID, RoleType, "
-		"PhoneCode from user_info order by UserID;");
+	snprintf(szGuarderSql, sizeof(szGuarderSql), "select UserID, UserName, Password, OrgID, RoleType from"
+		" user_info order by UserID;");
 	snprintf(szTaskSql, sizeof(szTaskSql), "select TaskID, TaskType, LimitDistance, StartTime, "
 		"Destination, UserID as GuarderID, DeviceID, task_info.PersonID, person_info.PersonName, IsOut, "
 		"Handset from task_info, person_info where TaskState = 0 and task_info.PersonID = person_info."
 		"PersonID order by TaskID;");
-	snprintf(szFenceSql, sizeof(szFenceSql), "select fenceId, fenceType, fenceContent, activeFlag from "
-		"fence_info order by fenceId desc;");
-	snprintf(szFenceTaskSql, sizeof(szFenceTaskSql), "select fenceTaskId, fenceId, factoryIde, deviceId, "
-		"startTime from fence_task_info where taskState = 0 order by fenceTaskId desc;");
-
 	size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
 	dbproxy::SqlTransaction * pSqlTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
-	pSqlTransaction->uiSqlCount = 7;
+	pSqlTransaction->uiSqlCount = 5;
 	pSqlTransaction->uiTransactionSequence = getNextInteractSequence();
 	pSqlTransaction->szTransactionFrom[0] = '\0';
 	pSqlTransaction->ulTransactionTime = (unsigned long)time(NULL);
@@ -6398,22 +5668,6 @@ bool DbProxy::initSqlBuffer()
 	pSqlTransaction->pSqlList[4].pStatement = (char *)zmalloc(nTaskSqlLen + 1);
 	strncpy_s(pSqlTransaction->pSqlList[4].pStatement, nTaskSqlLen + 1, szTaskSql, nTaskSqlLen);
 	pSqlTransaction->pSqlList[4].pStatement[nTaskSqlLen] = '\0';
-
-	size_t nFenceSqlLen = strlen(szFenceSql);
-	pSqlTransaction->pSqlList[5].ulStatementLen = nFenceSqlLen;
-	pSqlTransaction->pSqlList[5].uiCorrelativeTable = escort_db::E_TBL_FENCE;
-	pSqlTransaction->pSqlList[5].pStatement = (char *)zmalloc(nFenceSqlLen + 1);
-	strncpy_s(pSqlTransaction->pSqlList[5].pStatement, nFenceSqlLen + 1, szFenceSql, nFenceSqlLen);
-	pSqlTransaction->pSqlList[5].pStatement[nFenceSqlLen] = '\0';
-
-	size_t nFenceTaskSqlLen = strlen(szFenceTaskSql);
-	pSqlTransaction->pSqlList[6].ulStatementLen = nFenceTaskSqlLen;
-	pSqlTransaction->pSqlList[6].uiCorrelativeTable = escort_db::E_TBL_TASK_FENCE;
-	pSqlTransaction->pSqlList[6].pStatement = (char *)zmalloc(nFenceTaskSqlLen + 1);
-	strncpy_s(pSqlTransaction->pSqlList[6].pStatement, nFenceTaskSqlLen + 1, szFenceTaskSql, 
-		nFenceTaskSqlLen);
-	pSqlTransaction->pSqlList[6].pStatement[nFenceTaskSqlLen] = '\0';
-
 	if (!addSqlTransaction(pSqlTransaction, SQLTYPE_QUERY)) {
 		for (unsigned int i = 0; i < pSqlTransaction->uiSqlCount; i++) {
 			free(pSqlTransaction->pSqlList[i].pStatement);
@@ -6463,13 +5717,12 @@ int supervise(zloop_t * loop_, int timer_id_, void * arg_)
 				}
 				pthread_mutex_unlock(&pProxy->m_mutex4RemoteLink);
 			}
-			if (pProxy->m_nTimerTickCount % 3 == 0) { //2min
+			if (pProxy->m_nTimerTickCount % 12 == 0) { //2min
 				time_t now = time(NULL);
 				pthread_mutex_lock(&DbProxy::g_mutex4UpdateTime);
 				double interval = difftime(now, (time_t)DbProxy::g_ulLastUpdateTime);
-				if (interval >= 30.00/*120.0000*/) {
-					int nState = pProxy->getPipeState();
-					if (nState == dbproxy::E_PIPE_CLOSE) {
+				if (interval >= 120.0000) {
+					if (pProxy->g_nUpdatePipeState == dbproxy::E_PIPE_CLOSE) {
 						size_t nTaskSize = sizeof(dbproxy::UpdatePipeTask);
 						dbproxy::UpdatePipeTask * pTask = (dbproxy::UpdatePipeTask *)zmalloc(nTaskSize);
 						pTask->ulUpdateTaskTime = (unsigned long)now;
@@ -6478,25 +5731,13 @@ int supervise(zloop_t * loop_, int timer_id_, void * arg_)
 							pTask = NULL;
 						}
 						else {
-							pProxy->setPipeState(dbproxy::E_PIPE_OPEN);
-						}
-					}
-					else if (interval >= 90) {
-						size_t nTaskSize = sizeof(dbproxy::UpdatePipeTask);
-						dbproxy::UpdatePipeTask * pTask = (dbproxy::UpdatePipeTask *)zmalloc(nTaskSize);
-						pTask->ulUpdateTaskTime = (unsigned long)now;
-						if (!pProxy->addUpdateTask(pTask)) {
-							free(pTask);
-							pTask = NULL;
-						}
-						else {
-							pProxy->setPipeState(dbproxy::E_PIPE_OPEN);
+							pProxy->g_nUpdatePipeState = dbproxy::E_PIPE_OPEN;
 						}
 					}
 				}
 				pthread_mutex_unlock(&DbProxy::g_mutex4UpdateTime);
 			}
-			if (pProxy->m_nTimerTickCount % 60 == 0) { //10min
+			if (pProxy->m_nTimerTickCount % 90 == 0) { //15min
 				//keep connection alive
 				char szLog[512] = { 0 };
 				if (pProxy->m_locateConn) {
@@ -6586,22 +5827,32 @@ void DbProxy::updatePipeLoop()
 			pthread_mutex_unlock(&m_mutex4UpdatePipe);
 			break;
 		}
-		dbproxy::UpdatePipeTask * pTask = m_updateTaskQue.front();
+		dbproxy::UpdatePipeTask * pTask =	m_updateTaskQue.front();
 		m_updateTaskQue.pop();
 		pthread_mutex_unlock(&m_mutex4UpdatePipe);
 		if (pTask) {
 			do {
-				int nPipeState = getPipeState();
-				if (nPipeState == dbproxy::E_PIPE_OPEN) {
+				if (g_nUpdatePipeState == dbproxy::E_PIPE_OPEN) {
 					char szLastUpdateTime[20];
 					format_sqldatetime(g_ulLastUpdateTime, szLastUpdateTime, sizeof(szLastUpdateTime));
+
 					MYSQL_RES * res_ptr;
 					int nErr;
-
 					char szOrgSql[256] = { 0 };
 					snprintf(szOrgSql, sizeof(szOrgSql), "select OrgID, OrgName, ParentID from org_info where"
 						" LastOptTime >'%s' order by OrgID;", szLastUpdateTime);
 					unsigned long ulOrgSqlLen = strlen(szOrgSql);
+					char szGuarderSql[256] = { 0 };
+					snprintf(szGuarderSql, sizeof(szGuarderSql), "select UserID, UserName, Password, OrgID, "
+						"RoleType from user_info where LastOptTime > '%s' order by UserID;", szLastUpdateTime);
+					unsigned long ulGuarderSqlLen = strlen(szGuarderSql);
+					char szDeviceSql[256] = { 0 };
+					snprintf(szDeviceSql, sizeof(szDeviceSql), "select DeviceID, FactoryId, OrgId, LastCommun"
+						"cation, LastLocation, Latitude, Longitude, LocationType, IsUse, Power, Online, IsRemove"
+						" from device_info where LastOptTime > '%s' order by DeviceID, FactoryId;", 
+						szLastUpdateTime);
+					unsigned long ulDeviceSqlLen = strlen(szDeviceSql);
+
 					nErr = mysql_real_query(m_updateConn, szOrgSql, ulOrgSqlLen);
 					if (nErr == 0) {
 						res_ptr = mysql_store_result(m_updateConn);
@@ -6610,8 +5861,8 @@ void DbProxy::updatePipeLoop()
 							if (nRowCount > 0) {
 								MYSQL_ROW row;
 								size_t nCount = (size_t)nRowCount;
-								size_t nOrgSqlSize = sizeof(escort_db::SqlOrg);
-								escort_db::SqlOrg * pOrgList = (escort_db::SqlOrg *)zmalloc(nCount * nOrgSqlSize);
+								size_t nOrgSize = sizeof(escort_db::SqlOrg);
+								escort_db::SqlOrg * pOrgList = (escort_db::SqlOrg *)zmalloc(nCount * nOrgSize);
 								size_t i = 0;
 								while (row = mysql_fetch_row(res_ptr)) {
 									strncpy_s(pOrgList[i].szOrgId, sizeof(pOrgList[i].szOrgId), row[0], strlen(row[0]));
@@ -6621,14 +5872,6 @@ void DbProxy::updatePipeLoop()
 										strlen(row[2]));
 									i++;
 								}
-								BufferUpdate bufferUpdateInfo;
-								bufferUpdateInfo.usUpdateObject = BUFFER_ORG;
-								bufferUpdateInfo.usUpdateDataCount = (unsigned short)nCount;
-								size_t nOrgSize = sizeof(Organization);
-								bufferUpdateInfo.uiUpdateDataLen = nCount + nOrgSize;
-								bufferUpdateInfo.pUpdateData = (unsigned char *)zmalloc(
-									bufferUpdateInfo.uiUpdateDataLen + 1);
-								size_t nOffset = 0;
 								pthread_mutex_lock(&g_mutex4OrgList);
 								for (i = 0; i < nCount; i++) {
 									Organization * pOrg = (Organization *)zhash_lookup(g_orgList, pOrgList[i].szOrgId);
@@ -6641,13 +5884,6 @@ void DbProxy::updatePipeLoop()
 											strncpy_s(pOrg->szParentOrgId, sizeof(pOrg->szParentOrgId),
 												pOrgList[i].szParentOrgId, strlen(pOrgList[i].szParentOrgId));
 										}
-										memcpy_s(bufferUpdateInfo.pUpdateData + nOffset, bufferUpdateInfo.uiUpdateDataLen - nOffset,
-											pOrg, nOrgSize);
-										nOffset += nOrgSize;
-										snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]Update from DB, execute Update OrgId=%s, OrgName=%s"
-											", OrgParentId=%s\r\n", __FUNCTION__, __LINE__, pOrgList[i].szOrgId, pOrgList[i].szOrgName, 
-											pOrgList[i].szParentOrgId);
-										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 									}
 									else {
 										pOrg = (Organization *)zmalloc(sizeof(Organization));
@@ -6659,83 +5895,21 @@ void DbProxy::updatePipeLoop()
 											pOrgList[i].szParentOrgId, strlen(pOrgList[i].szParentOrgId));
 										zhash_update(g_orgList, pOrg->szOrgId, pOrg);
 										zhash_freefn(g_orgList, pOrg->szOrgId, free);
-										snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]Update from DB, execute insert OrgId=%s, OrgName=%s"
-											", OrgParentId=%s\r\n", __FUNCTION__, __LINE__, pOrgList[i].szOrgId, pOrgList[i].szOrgName,
-											pOrgList[i].szParentOrgId);
-										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-										memcpy_s(bufferUpdateInfo.pUpdateData + nOffset, bufferUpdateInfo.uiUpdateDataLen - nOffset,
-											pOrg, nOrgSize);
-										nOffset += nOrgSize;
 									}
 								}
 								pthread_mutex_unlock(&g_mutex4OrgList);
-
-								bufferUpdateInfo.pUpdateData[bufferUpdateInfo.uiUpdateDataLen] = '\0';
-								bufferUpdateInfo.ulUpdateTime = (unsigned long)time(NULL);
-								size_t nBufferUpdateSize = sizeof(BufferUpdate);
-								unsigned short usUpdatePipeSequence = getNextPipeSequence();
-								MessagePayload msgPayload;
-								size_t nPayloadSize = sizeof(MessagePayload);
-								MAKE_PAYLOAD_MARK(msgPayload.szMsgMark);
-								MAKE_PAYLOAD_VERSION(msgPayload.szMsgVersion);
-								msgPayload.usMsgType = MSG_BUFFER_MODIFY;
-								msgPayload.usMsgSequence = usUpdatePipeSequence;
-								msgPayload.uiMsgCount = 1;
-								msgPayload.uiMsgDataLength = nBufferUpdateSize + bufferUpdateInfo.uiUpdateDataLen;
-								msgPayload.pMsgData = (unsigned char *)zmalloc(msgPayload.uiMsgDataLength + 1);
-								memcpy_s(msgPayload.pMsgData, msgPayload.uiMsgDataLength, &bufferUpdateInfo,
-									nBufferUpdateSize);
-								memcpy_s(msgPayload.pMsgData + nBufferUpdateSize, bufferUpdateInfo.uiUpdateDataLen + 1,
-									bufferUpdateInfo.pUpdateData, bufferUpdateInfo.uiUpdateDataLen);
-								msgPayload.pMsgData[msgPayload.uiMsgDataLength] = '\0';
-								size_t nFrameDataLen = nPayloadSize + msgPayload.uiMsgDataLength;
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &msgPayload, nPayloadSize);
-								memcpy_s(pFrameData + nFrameDataLen, nFrameDataLen - nPayloadSize + 1,
-									msgPayload.pMsgData, msgPayload.uiMsgDataLength);
-								pFrameData[nFrameDataLen] = '\0';
-								zmsg_t * msg_update = zmsg_new();
-								zframe_t * frame_update = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_append(msg_update, &frame_update);
-								zmsg_send(&msg_update, m_pipeline);
 								free(pOrgList);
 								pOrgList = NULL;
-								free(pFrameData);
-								pFrameData = NULL;
-								if (bufferUpdateInfo.pUpdateData && bufferUpdateInfo.uiUpdateDataLen) {
-									free(bufferUpdateInfo.pUpdateData);
-									bufferUpdateInfo.pUpdateData = NULL;
-									bufferUpdateInfo.uiUpdateDataLen = 0;
-								}
-								if (msgPayload.pMsgData && msgPayload.uiMsgDataLength) {
-									free(msgPayload.pMsgData);
-									msgPayload.pMsgData = NULL;
-									msgPayload.uiMsgDataLength = 0;
-								}
 							}
 							mysql_free_result(res_ptr);
 						}
 					}
 					else {
-						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute OrgList sql update Loop error=%u,"
+						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute OrgList sql update Loop error=%d,"
 							"%s\r\n", __FUNCTION__, __LINE__, mysql_errno(m_updateConn), mysql_error(m_updateConn));
 						writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-						mysql_close(m_updateConn);
-						m_updateConn = mysql_init(NULL);
-						if (m_updateConn && mysql_real_connect(m_updateConn, m_zkDbProxy.szDbHostIp, m_zkDbProxy.szDbUser,
-							m_zkDbProxy.szDbPasswd, m_zkDbProxy.szMajorSample, 3306, NULL, 0)) {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect update db %s, ip=%s, user=%s at"
-								" %ld\r\n", __FUNCTION__, __LINE__, m_zkDbProxy.szMajorSample, m_zkDbProxy.szDbHostIp, 
-								m_zkDbProxy.szDbUser, (long)time(NULL));
-							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-						}
 						break;
 					}
-					
-					char szGuarderSql[256] = { 0 };
-					snprintf(szGuarderSql, sizeof(szGuarderSql), "select UserID, UserName, Password, OrgID, "
-						"RoleType from user_info where LastOptTime > '%s' order by UserID;", szLastUpdateTime);
-					unsigned long ulGuarderSqlLen = strlen(szGuarderSql);
 					nErr = mysql_real_query(m_updateConn, szGuarderSql, ulGuarderSqlLen);
 					if (nErr == 0) {
 						res_ptr = mysql_store_result(m_updateConn);
@@ -6770,7 +5944,7 @@ void DbProxy::updatePipeLoop()
 								size_t nOffset = 0;
 								pthread_mutex_lock(&g_mutex4GuarderList);
 								for (i = 0; i < nCount; i++) {
-									Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, pGuarderList[i].szUserId);
+									Guarder * pGuarder = (Guarder *)zhash_lookup(g_deviceList, pGuarderList[i].szUserId);
 									if (pGuarder) {
 										if (strcmp(pGuarderList[i].szUserName, pGuarder->szTagName) != 0) {
 											strncpy_s(pGuarder->szTagName, sizeof(pGuarder->szTagName),
@@ -6790,11 +5964,6 @@ void DbProxy::updatePipeLoop()
 										memcpy_s(bufferUpdateInfo.pUpdateData + nOffset, bufferUpdateInfo.uiUpdateDataLen
 											- nOffset, pGuarder, nGuarderSize);
 										nOffset += nGuarderSize;
-										snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update from DB, UPDATE guarder"
-											"id=%s, name=%s, password=%s, orgId=%s, roleType=%d\r\n", __FUNCTION__, __LINE__,
-											pGuarderList[i].szUserId, pGuarderList[i].szUserName, pGuarderList[i].szPasswd,
-											pGuarderList[i].szOrgId, pGuarderList[i].nUserRoleType);
-										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 									}
 									else {
 										pGuarder = (Guarder *)zmalloc(nGuarderSize);
@@ -6819,11 +5988,6 @@ void DbProxy::updatePipeLoop()
 										memcpy_s(bufferUpdateInfo.pUpdateData + nOffset, bufferUpdateInfo.uiUpdateDataLen
 											- nOffset, pGuarder, nGuarderSize);
 										nOffset += nGuarderSize;
-										snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update from DB, INSERT new guarder"
-											"id=%s, name=%s, password=%s, orgId=%s, roleType=%d\r\n", __FUNCTION__, __LINE__,
-											pGuarderList[i].szUserId, pGuarderList[i].szUserName, pGuarderList[i].szPasswd,
-											pGuarderList[i].szOrgId, pGuarderList[i].nUserRoleType);
-										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 									}
 								}
 								pthread_mutex_unlock(&g_mutex4GuarderList);
@@ -6884,24 +6048,8 @@ void DbProxy::updatePipeLoop()
 							" error=%d:%s\r\n", __FUNCTION__, __LINE__, szLastUpdateTime, mysql_errno(m_updateConn),
 							mysql_error(m_updateConn));
 						writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-						mysql_close(m_updateConn);
-						m_updateConn = mysql_init(NULL);
-						if (m_updateConn && mysql_real_connect(m_updateConn, m_zkDbProxy.szDbHostIp, 
-							m_zkDbProxy.szDbUser, m_zkDbProxy.szDbPasswd, m_zkDbProxy.szMajorSample, 3306, NULL, 0)) {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect update db %s, ip=%s, user=%s at "
-								"%ld\r\n", __FUNCTION__, __LINE__, m_zkDbProxy.szMajorSample, m_zkDbProxy.szDbHostIp, 
-								m_zkDbProxy.szDbUser, (long)time(NULL));
-							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-						}
 						break;
 					}
-					
-					char szDeviceSql[256] = { 0 };
-					snprintf(szDeviceSql, sizeof(szDeviceSql), "select DeviceID, FactoryId, OrgId, LastCommun"
-						"cation, LastLocation, Latitude, Longitude, LocationType, IsUse, Power, Online, IsRemove"
-						" from device_info where LastOptTime > '%s' order by DeviceID, FactoryId;", 
-						szLastUpdateTime);
-					unsigned long ulDeviceSqlLen = strlen(szDeviceSql);
 					nErr = mysql_real_query(m_updateConn, szDeviceSql, ulDeviceSqlLen);
 					if (nErr == 0) {
 						res_ptr = mysql_store_result(m_updateConn);
@@ -6913,7 +6061,6 @@ void DbProxy::updatePipeLoop()
 								size_t nSqlDeviceSize = sizeof(escort_db::SqlDevice);
 								escort_db::SqlDevice * pDeviceList = (escort_db::SqlDevice *)zmalloc(
 									nCount * nSqlDeviceSize);
-								memset(pDeviceList, 0, nCount * nSqlDeviceSize);
 								size_t i = 0;
 								while (row = mysql_fetch_row(res_ptr)) {
 									strncpy_s(pDeviceList[i].szDeviceId, sizeof(pDeviceList[i].szDeviceId),
@@ -6966,27 +6113,21 @@ void DbProxy::updatePipeLoop()
 								for (size_t i = 0; i < nCount; i++) {
 									WristletDevice * pDevice = (WristletDevice *)zhash_lookup(g_deviceList,
 										pDeviceList[i].szDeviceId);
-									if (pDevice) { //check option: factoryId, OrgId, 
-										bool bUpdate = false;
+									if (pDevice) { //check option: factoryId, OrgId, battery
 										if (strcmp(pDevice->deviceBasic.szFactoryId, pDeviceList[i].szFactoryId) != 0) {
 											strncpy_s(pDevice->deviceBasic.szFactoryId, sizeof(pDevice->deviceBasic.szFactoryId),
 												pDeviceList[i].szFactoryId, strlen(pDeviceList[i].szFactoryId));
-											bUpdate = true;
 										}
 										if (strcmp(pDevice->szOrganization, pDeviceList[i].szOrgId) != 0) {
 											strncpy_s(pDevice->szOrganization, sizeof(pDevice->szOrganization),
 												pDeviceList[i].szOrgId, strlen(pDeviceList[i].szFactoryId));
-											bUpdate = true;
+										}
+										if (pDevice->deviceBasic.nBattery != (unsigned char)pDeviceList[i].usBattery) {
+											pDevice->deviceBasic.nBattery = (unsigned char)pDeviceList[i].usBattery;
 										}
 										memcpy_s(bufferUpdateInfo.pUpdateData + nOffset, bufferUpdateInfo.uiUpdateDataLen - nOffset,
 											pDevice, nDeviceSize);
 										nOffset += nDeviceSize;
-										if (bUpdate) {
-											snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update from DB, UPDATE device=%s, "
-												"factoryId=%s, orgId=%s\r\n", __FUNCTION__, __LINE__, pDeviceList[i].szDeviceId,
-												pDeviceList[i].szFactoryId, pDeviceList[i].szOrgId);
-											writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-										}
 									}
 									else {
 										pDevice = (WristletDevice *)zmalloc(nDeviceSize);
@@ -6997,7 +6138,6 @@ void DbProxy::updatePipeLoop()
 											pDeviceList[i].szFactoryId, strlen(pDeviceList[i].szFactoryId));
 										strncpy_s(pDevice->szOrganization, sizeof(pDevice->szOrganization),
 											pDeviceList[i].szOrgId, strlen(pDeviceList[i].szOrgId));
-										pDevice->deviceBasic.nLooseStatus = (unsigned char)pDeviceList[i].usIsRemove;
 										pDevice->deviceBasic.ulLastActiveTime = 0;
 										pDevice->deviceBasic.nBattery = (unsigned char)pDeviceList[i].usBattery;
 										if (pDevice->deviceBasic.nBattery == 0) {
@@ -7010,9 +6150,6 @@ void DbProxy::updatePipeLoop()
 											else {
 												pDevice->deviceBasic.nStatus = DEV_ONLINE;
 											}
-										}
-										if (pDevice->deviceBasic.nLooseStatus) {
-											pDevice->deviceBasic.nStatus += DEV_LOOSE;
 										}
 										pDevice->deviceBasic.ulLastActiveTime = 0;
 										pDevice->szBindGuard[0] = '\0';
@@ -7044,11 +6181,6 @@ void DbProxy::updatePipeLoop()
 										memcpy_s(bufferUpdateInfo.pUpdateData + nOffset, bufferUpdateInfo.uiUpdateDataLen - nOffset,
 											pDevice, nDeviceSize);
 										nOffset += nDeviceSize;
-										snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update from DB, INSERT device=%s, "
-											"factoryId=%s, orgId=%s, battery=%u, online=%u, isRemove=%u\r\n", __FUNCTION__, __LINE__,
-											pDeviceList[i].szDeviceId, pDeviceList[i].szFactoryId, pDeviceList[i].szOrgId, 
-											pDeviceList[i].usBattery, pDeviceList[i].usOnline, pDeviceList[i].usIsRemove);
-										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 									}
 								}
 								pthread_mutex_unlock(&g_mutex4DevList);
@@ -7106,165 +6238,14 @@ void DbProxy::updatePipeLoop()
 							" error=%d,%s\r\n", __FUNCTION__, __LINE__, szLastUpdateTime, mysql_errno(m_updateConn),
 							mysql_error(m_updateConn));
 						writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-						mysql_close(m_updateConn);
-						m_updateConn = mysql_init(NULL);
-						if (m_updateConn && mysql_real_connect(m_updateConn, m_zkDbProxy.szDbHostIp, 
-							m_zkDbProxy.szDbUser, m_zkDbProxy.szDbPasswd, m_zkDbProxy.szMajorSample, 3306, NULL, 0)) {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect update db %s, ip=%s, user=%s at"
-								" %ld\r\n", __FUNCTION__, __LINE__, m_zkDbProxy.szMajorSample, m_zkDbProxy.szDbHostIp, 
-								m_zkDbProxy.szDbUser, (long)time(NULL));
-							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-						}
-					}
-					
-					char szFenceSql[256] = { 0 };
-					snprintf(szFenceSql, sizeof(szFenceSql), "select fenceId, fenceType, fenceContent, activeFlag"
-						" from fence_info where lastOptTime > '%s' order by fenceId desc;", szLastUpdateTime);
-					unsigned long ulFenceSqlLen = strlen(szFenceSql);
-					nErr = mysql_real_query(m_updateConn, szFenceSql, ulFenceSqlLen);
-					if (nErr == 0) {
-						res_ptr = mysql_store_result(m_updateConn);
-						if (res_ptr) {
-							my_ulonglong nRowCount = mysql_num_rows(res_ptr);
-							if (nRowCount > 0) {
-								size_t nCount = (size_t)nRowCount;
-								size_t nSqlGuarderSize = sizeof(escort_db::SqlFence);
-								escort_db::SqlFence * pSqlFenceList = (escort_db::SqlFence *)zmalloc(nCount * nSqlGuarderSize);
-								size_t i = 0;
-								MYSQL_ROW row;
-								while (row = mysql_fetch_row(res_ptr)) {
-									pSqlFenceList[i].nFenceId = atoi(row[0]);
-									pSqlFenceList[i].usFenceType = (unsigned short)atoi(row[1]);
-									strncpy_s(pSqlFenceList[i].szFenceContent, sizeof(pSqlFenceList[i].szFenceContent), 
-										row[2], strlen(row[2]));
-									pSqlFenceList[i].usFenceActive = (unsigned short)atoi(row[3]);
-									i++;
-								}
-
-								size_t nOffset = 0;
-								size_t nFenceSize = sizeof(EscortFence);
-								BufferUpdate bufferUpdateInfo;
-								bufferUpdateInfo.usUpdateObject = BUFFER_FENCE;
-								bufferUpdateInfo.usUpdateDataCount = (unsigned short)nCount;
-								bufferUpdateInfo.uiUpdateDataLen = nCount * nFenceSize;
-								bufferUpdateInfo.pUpdateData = (unsigned char *)zmalloc(bufferUpdateInfo.uiUpdateDataLen + 1);
-								pthread_mutex_lock(&g_mutex4FenceList);
-								for (i = 0; i < nCount; i++) {
-									char szFenceId[10] = { 0 };
-									sprintf_s(szFenceId, sizeof(szFenceId), "%d", pSqlFenceList[i].nFenceId);
-									EscortFence * pFence = (EscortFence *)zhash_lookup(g_fenceList, szFenceId);
-									if (pFence) {
-										if (strcmp(pFence->szFenceContent, pSqlFenceList[i].szFenceContent) != 0) {
-											strncpy_s(pFence->szFenceContent, sizeof(pFence->szFenceContent),
-												pSqlFenceList[i].szFenceContent, strlen(pSqlFenceList[i].szFenceContent));
-										}
-										if (pFence->nActiveFlag != pSqlFenceList[i].usFenceActive) {
-											pFence->nActiveFlag = pSqlFenceList[i].usFenceActive;
-										}
-										memcpy_s(bufferUpdateInfo.pUpdateData + nOffset,
-											bufferUpdateInfo.uiUpdateDataLen - nOffset, pFence, nFenceSize);
-										nOffset += nFenceSize;
-										snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update from DB, UPDATE fence "
-											"id=%d, type=%d, content=%s, active=%d\r\n", __FUNCTION__, __LINE__,
-											pSqlFenceList[i].nFenceId, pSqlFenceList[i].usFenceType,
-											pSqlFenceList[i].szFenceContent, pSqlFenceList[i].usFenceActive);
-										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-									}
-									else {
-										EscortFence * pFence = (EscortFence *)zmalloc(nFenceSize);
-										memset(pFence, 0, nFenceSize);
-										pFence->nFenceId = pSqlFenceList[i].nFenceId;
-										pFence->nFenceType = pSqlFenceList[i].usFenceType;
-										strncpy_s(pFence->szFenceContent, sizeof(pFence->szFenceContent),
-											pSqlFenceList[i].szFenceContent, strlen(pSqlFenceList[i].szFenceContent));
-										pFence->nActiveFlag = pSqlFenceList[i].usFenceActive;
-										char szFenceId[10] = { 0 };
-										sprintf_s(szFenceId, sizeof(szFenceId), "%d", pFence->nFenceId);
-										zhash_update(g_fenceList, szFenceId, pFence);
-										zhash_freefn(g_fenceList, szFenceId, free);
-										memcpy_s(bufferUpdateInfo.pUpdateData + nOffset, bufferUpdateInfo.uiUpdateDataLen
-											- nOffset, pFence, nFenceSize);
-										nOffset += nFenceSize;
-										snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update from DB, INSERT new "
-											"fence id=%d, type=%d, active=%d, content=%s\r\n", __FUNCTION__, __LINE__,
-											pSqlFenceList[i].nFenceId, pSqlFenceList[i].usFenceType,
-											pSqlFenceList[i].usFenceActive, pSqlFenceList[i].szFenceContent);
-										writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-									}
-								}
-								pthread_mutex_unlock(&g_mutex4FenceList);
-								bufferUpdateInfo.pUpdateData[bufferUpdateInfo.uiUpdateDataLen] = '\0';
-								bufferUpdateInfo.ulUpdateTime = (unsigned long)time(NULL);
-								size_t nBufferUpdateSize = sizeof(BufferUpdate);
-								unsigned short usUpdatePipeSequence = getNextPipeSequence();
-								MessagePayload msgPayload;
-								size_t nPayloadSize = sizeof(MessagePayload);
-								MAKE_PAYLOAD_MARK(msgPayload.szMsgMark);
-								MAKE_PAYLOAD_VERSION(msgPayload.szMsgVersion);
-								msgPayload.usMsgType = MSG_BUFFER_MODIFY;
-								msgPayload.usMsgSequence = usUpdatePipeSequence;
-								msgPayload.uiMsgCount = 1;
-								msgPayload.uiMsgDataLength = nBufferUpdateSize + bufferUpdateInfo.uiUpdateDataLen;
-								msgPayload.pMsgData = (unsigned char *)zmalloc(msgPayload.uiMsgDataLength + 1);
-								memcpy_s(msgPayload.pMsgData, msgPayload.uiMsgDataLength, &bufferUpdateInfo,
-									nBufferUpdateSize);
-								memcpy_s(msgPayload.pMsgData + nBufferUpdateSize, bufferUpdateInfo.uiUpdateDataLen + 1,
-									bufferUpdateInfo.pUpdateData, bufferUpdateInfo.uiUpdateDataLen);
-								msgPayload.pMsgData[msgPayload.uiMsgDataLength] = '\0';
-								size_t nFrameDataLen = nPayloadSize + msgPayload.uiMsgDataLength;
-								unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-								memcpy_s(pFrameData, nFrameDataLen, &msgPayload, nPayloadSize);
-								memcpy_s(pFrameData + nPayloadSize, msgPayload.uiMsgDataLength + 1, msgPayload.pMsgData,
-									msgPayload.uiMsgDataLength);
-								pFrameData[nFrameDataLen] = '\0';
-								zmsg_t * msg_update = zmsg_new();
-								zframe_t * frame_update = zframe_new(pFrameData, nFrameDataLen);
-								zmsg_append(msg_update, &frame_update);
-								zmsg_send(&msg_update, m_pipeline);
-
-								free(pSqlFenceList);
-								pSqlFenceList = NULL;
-								if (bufferUpdateInfo.pUpdateData && bufferUpdateInfo.uiUpdateDataLen > 0) {
-									free(bufferUpdateInfo.pUpdateData);
-									bufferUpdateInfo.pUpdateData = NULL;
-									bufferUpdateInfo.uiUpdateDataLen = 0;
-								}
-								if (msgPayload.pMsgData && msgPayload.uiMsgDataLength) {
-									free(msgPayload.pMsgData);
-									msgPayload.pMsgData = NULL;
-									msgPayload.uiMsgDataLength = 0;
-								}
-								free(pFrameData);
-								pFrameData = NULL;
-								snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update fenceList sql at %s\r\n",
-									__FUNCTION__, __LINE__, szLastUpdateTime);
-								writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-							}
-							mysql_free_result(res_ptr);
-						}
-					}
-					else {
-						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update FenceList sql at %s failed, "
-							"error=%d,%s\r\n", __FUNCTION__, __LINE__, szLastUpdateTime, mysql_errno(m_updateConn),
-							mysql_error(m_updateConn));
-						writeLog(szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-						mysql_close(m_updateConn);
-						m_updateConn = mysql_init(NULL);
-						if (m_updateConn && mysql_real_connect(m_updateConn, m_zkDbProxy.szDbHostIp, 
-							m_zkDbProxy.szDbUser, m_zkDbProxy.szDbPasswd, m_zkDbProxy.szMajorSample, 3306, NULL, 0)) {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect update db %s, ip=%s, user=%s at "
-								"%ld\r\n", __FUNCTION__, __LINE__, m_zkDbProxy.szMajorSample, m_zkDbProxy.szDbHostIp,
-								m_zkDbProxy.szDbUser, (long)time(NULL));
-							writeLog(szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-						}
 					}
 				}
 			} while (0);
 			g_ulLastUpdateTime = pTask->ulUpdateTaskTime;
-			setPipeState(dbproxy::E_PIPE_CLOSE);
+			g_nUpdatePipeState = dbproxy::E_PIPE_CLOSE;
 			free(pTask);
 			pTask = NULL;
-		}
+		}	
 	} while (1);
 }
 
@@ -7281,22 +6262,6 @@ bool DbProxy::addUpdateTask(dbproxy::UpdatePipeTask * pTask_)
 		pthread_mutex_unlock(&m_mutex4UpdatePipe);
 	}
 	return result;
-}
-
-int DbProxy::getPipeState()
-{
-	int result = 0;
-	pthread_mutex_lock(&g_mutex4PipeState);
-	result = g_nUpdatePipeState;
-	pthread_mutex_unlock(&g_mutex4PipeState);
-	return result;
-}
-
-void DbProxy::setPipeState(int nState_)
-{
-	pthread_mutex_lock(&g_mutex4PipeState);
-	g_nUpdatePipeState = nState_;
-	pthread_mutex_unlock(&g_mutex4PipeState);
 }
 
 void * dealLogThread(void * param_)

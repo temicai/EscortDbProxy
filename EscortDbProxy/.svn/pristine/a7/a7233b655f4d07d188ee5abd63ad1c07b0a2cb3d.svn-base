@@ -20,18 +20,15 @@ namespace escort_db
 	enum eEsortDBTable
 	{
 		E_TBL_UNDEFINE = 0,
-		E_TBL_PERSON = 1,				//person_info
-		E_TBL_GUARDER = 2,			//user_info
-		E_TBL_DEVICE = 3,				//device_info
-		E_TBL_TASK = 4,					//task_info
-		E_TBL_ALARM = 5,				//alarm_info
-		E_TBL_MESSAGE = 6,			//message_info
-		E_TBL_ORG = 7,					//org_info
-		E_TBL_LOCATE = 8,				
-		E_TBL_TASK_EXTRA = 9,		//task_extra_info
-		E_TBL_CAMERA = 10,			//camera_info
-		E_TBL_FENCE = 11,				//fence_info
-		E_TBL_TASK_FENCE = 12,	//fence_task_info
+		E_TBL_PERSON = 1,			//person_info
+		E_TBL_GUARDER = 2,		//user_info
+		E_TBL_DEVICE = 3,			//device_info
+		E_TBL_TASK = 4,				//task_info
+		E_TBL_ALARM = 5,			//alarm_info
+		E_TBL_MESSAGE = 6,		//message_info
+		E_TBL_ORG = 7,				//org_info
+		E_TBL_LOCATE = 8,			//
+		E_TBL_TASK_EXTRA = 9,	//task_extra_info
 	};
 
 	enum eEscortDBAlarmType
@@ -50,13 +47,6 @@ namespace escort_db
 		E_LOCATE_APP = 3,
 	};
 
-	enum eEscortDBFenceType
-	{
-		E_FENCE_POLYGON = 0,
-		E_FENCE_RECT = 1,
-		E_FENCE_CIRCLE = 2,
-	};
-
 	typedef struct tagSqlContainer
 	{
 		unsigned int uiSqlOptSeq;
@@ -71,7 +61,7 @@ namespace escort_db
 
 	typedef struct tagSqlPerson
 	{
-		char szPersonId[32];
+		char szPersonId[20];
 		char szPersonName[32];
 		int nFlee;
 		tagSqlPerson()
@@ -89,7 +79,6 @@ namespace escort_db
 		char szPasswd[64];
 		char szOrgId[40];
 		int nUserRoleType; //1: admin, 2: app user, 3: admin & app user
-		char szPhoneCode[16];
 		tagSqlGuarder()
 		{
 			szUserId[0] = '\0';
@@ -97,7 +86,6 @@ namespace escort_db
 			szPasswd[0] = '\0';
 			szOrgId[0] = '\0';
 			nUserRoleType = 0;
-			szPhoneCode[0] = '\0';
 		}
 	} SqlGuarder;
 
@@ -106,7 +94,7 @@ namespace escort_db
 		char szTaskId[20];
 		unsigned short usTaskType;
 		unsigned short usTaskLimit;
-		char szDestination[64];
+		char szDestination[32];
 		char szStartTime[20];
 		char szGuarderId[20];
 		char szDeviceId[16];
@@ -147,7 +135,6 @@ namespace escort_db
 			szLastCommuncation[0] = '\0';
 			szLastLocation[0] = '\0';
 			dLat = dLng = 0.000000;
-			usIsRemove = 0;
 		}
 	} SqlDevice;
 
@@ -171,57 +158,17 @@ namespace escort_db
 		unsigned short usMsgSeq;
 		char szMsgUuid[40];
 		char szMsgBody[256];
-		char szMsgFrom[40];
 		unsigned long ulMsgTime;
 		tagSqlMessage()
 		{
 			szMsgTopic[0] = '\0';
 			szMsgUuid[0] = '\0';
 			szMsgBody[0] = '\0';
-			szMsgFrom[0] = '\0';
 			usMsgType = 0;
 			usMsgSeq = 0;
 			ulMsgTime = 0;
 		}
 	} SqlMessage;
-	
-	typedef struct tagSqlFence
-	{
-		int nFenceId; 
-		unsigned short usFenceType;		//0-polygon;1-rect;2-circle; 
-		unsigned short usFenceActive; //0-deactive;1-active
-		char szFenceContent[512];
-		tagSqlFence()
-		{
-			nFenceId = 0;
-			usFenceType = 0;
-			usFenceActive = 0;
-			szFenceContent[0] = '\0';
-		}
-	} SqlFence;
-
-	typedef struct tagSqlFenceTask
-	{
-		int nFenceTaskId;
-		int nFenceId;
-		int nTaskState;          //0-unfinish;1-finish
-		char szFactoryId[4];
-		char szDeviceId[16];
-		char szTaskStartTime[20];
-		char szTaskStopTime[20];
-		tagSqlFenceTask()
-		{
-			nFenceTaskId = 0;
-			nFenceId = 0;
-			nTaskState = 0;
-			szFactoryId[0] = '\0';
-			szDeviceId[0] = '\0';
-			szTaskStartTime[0] = '\0';
-			szTaskStopTime[0] = '\0';
-		}
-	} SqlFenceTask;
-
-
 
 }
 

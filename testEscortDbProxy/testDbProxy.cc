@@ -16,11 +16,16 @@ int main(int argc, char ** argv)
 	else {
 		uiInst = DbProxy_Start(szCfgFile);
 	}
-	DWORD dwProcessId = GetCurrentProcessId();
-	printf("PID=%lu, DbProxy Instance=%u\n", dwProcessId, uiInst);
-	getchar();
-	if (uiInst) {
-		DbProxy_Stop(uiInst);
+	if (uiInst > 0) {
+		DWORD dwProcessId = GetCurrentProcessId();
+		printf("PID=%lu, DbProxy Instance=%u\n", dwProcessId, uiInst);
+		//while (1) {
+		//	Sleep(1000);
+		//}
+		getchar();
+		if (uiInst) {
+			DbProxy_Stop(uiInst);
+		}
 	}
 	printf("end\n");
 	return 0;

@@ -206,7 +206,7 @@ DB_API unsigned int __stdcall DbProxy_Start(const char * pCfgFileName_)
 			DbProxy * pInst = new DbProxy(szZkHost, g_szDllDir);
 			if (pInst) {
 				if (pInst->Start(szDbProxyHost, usDbProxyQryPort, szMidwareHost, usMidwarePublishPort,
-					usMidwareTalkPort, usMidwareTalkPort, szDbHost, szDbUser, szDbPasswd, szDbMajorSample, 
+					usMidwareTalkPort, usMidwareCollectPort, szDbHost, szDbUser, szDbPasswd, szDbMajorSample, 
 					szDbLocateSample) == 0) {
 					unsigned int uiInst = (unsigned int)pInst;
 					pthread_mutex_lock(&g_mutex4InstList);

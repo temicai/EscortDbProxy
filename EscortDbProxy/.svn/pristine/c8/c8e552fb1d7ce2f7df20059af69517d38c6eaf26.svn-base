@@ -146,7 +146,6 @@ private:
 	void * m_interactor;
 	void * m_pipeline;  
 	pthread_t m_pthdNetwork;
-	char m_szPipelineIdentity[40];
 
 	//zookeeper
 	zhandle_t * m_zkHandle;
@@ -180,15 +179,11 @@ private:
 	static zhash_t * g_taskList;
 	static zhash_t * g_personList;
 	static zhash_t * g_orgList;
-	static zhash_t * g_fenceList;
-	static zhash_t * g_fenceTaskList;
 	static pthread_mutex_t g_mutex4DevList;
 	static pthread_mutex_t g_mutex4GuarderList;
 	static pthread_mutex_t g_mutex4TaskList;
 	static pthread_mutex_t g_mutex4PersonList;
 	static pthread_mutex_t g_mutex4OrgList;
-	static pthread_mutex_t g_mutex4FenceList;
-	static pthread_mutex_t g_mutex4FenceTaskList;
 	static int g_nRefCount;
 	static unsigned int g_uiInteractSequence;
 	static pthread_mutex_t g_mutex4InteractSequence;
@@ -197,7 +192,6 @@ private:
 	static BOOL g_bLoadSql;
 	//static char g_szLastUpdateTime[20]; 
 	static int g_nUpdatePipeState; //更新管道状态
-	static pthread_mutex_t g_mutex4PipeState;
 	static unsigned long g_ulLastUpdateTime;
 	static pthread_mutex_t g_mutex4UpdateTime;
 
@@ -275,7 +269,6 @@ protected:
 	void changeDeviceStatus(unsigned short usNewStatus, unsigned short & usDeviceStatus, int nMode = 0);
 	unsigned int getNextInteractSequence();
 	unsigned short getNextPipeSequence();
-
 	
 	void initZookeeper();
 	int competeForMaster();
@@ -289,8 +282,6 @@ protected:
 	bool initSqlBuffer();
 	void updatePipeLoop();
 	bool addUpdateTask(dbproxy::UpdatePipeTask * pUpdateTask);
-	int getPipeState();
-	void setPipeState(int);
 	
 	friend int supervise(zloop_t *, int, void *);
 	friend void * dealLogThread(void *);
