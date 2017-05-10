@@ -40,7 +40,6 @@ namespace escort_db
 		E_ALMTYPE_FLEE = 1,
 		E_ALMTYPE_LOWPOWER = 2,
 		E_ALMTYPE_LOOSE = 3,
-		E_ALMTYPE_FENCE = 4,
 	};
 
 	enum eEscortDBLocateType
@@ -190,15 +189,13 @@ namespace escort_db
 	{
 		int nFenceId; 
 		unsigned short usFenceType;		//0-polygon;1-rect;2-circle; 
-		uint8_t nFenceActive; //0-deactive;1-active
-		uint8_t nCoordinate; //0:standard;1:
+		unsigned short usFenceActive; //0-deactive;1-active
 		char szFenceContent[512];
 		tagSqlFence()
 		{
 			nFenceId = 0;
 			usFenceType = 0;
-			nFenceActive = 0;
-			nCoordinate = 0;
+			usFenceActive = 0;
 			szFenceContent[0] = '\0';
 		}
 	} SqlFence;

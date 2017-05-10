@@ -266,7 +266,6 @@ protected:
 	int handleTopicLowpoweAlarmMsg(TopicAlarmMessageLowpower *);
 	int handleTopicLooseAlarmMsg(TopicAlarmMessageLoose *);
 	int handleTopicFleeAlarmMsg(TopicAlarmMessageFlee *);
-	int handleTopicFenceAlarmMsg(TopicAlarmMessageFence *);
 
 	bool addInteractMsg(InteractionMessage *);
 	void dealInteractMsg();
