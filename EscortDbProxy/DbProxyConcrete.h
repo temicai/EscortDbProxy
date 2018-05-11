@@ -14,21 +14,18 @@
 #include "escort_common.h"
 #include "escort_error.h"
 #include "zk_escort.h"
-#include "pfLog.hh"
+#include "pf_log.h"
 #include "document.h" //rapidjson
 #include "EscortDbCommon.h"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "libmysql.lib")
 #pragma comment(lib, "pthreadVC2.lib")
-#pragma comment(lib, "pfLog.lib")
+#pragma comment(lib, "pf_log.lib")
 #pragma comment(lib, "libzmq.lib")
 #pragma comment(lib, "czmq.lib")
-#ifdef _DEBUG
-#pragma comment(lib, "zookeeper_d.lib")
-#else 
 #pragma comment(lib, "zookeeper.lib")
-#endif
+
 
 #define SQLTYPE_QUERY 0
 #define SQLTYPE_EXECUTE 1
@@ -39,12 +36,12 @@ namespace dbproxy
 	typedef struct tagSqlStatement
 	{
 		char * pStatement;
-		unsigned long ulStatementLen;
+		unsigned int uiStatementLen;
 		unsigned int uiCorrelativeTable;
 		tagSqlStatement()
 		{
 			pStatement = NULL;
-			ulStatementLen = 0;
+			uiStatementLen = 0;
 			uiCorrelativeTable = 0;
 		}
 		~tagSqlStatement()
@@ -52,15 +49,15 @@ namespace dbproxy
 			if (pStatement) {
 				free(pStatement);
 				pStatement = NULL;
-				ulStatementLen = 0;
+				uiStatementLen = 0;
 			}
 		}
 	} SqlStatement;
 
 	typedef struct tagSqlTransaction
 	{
+		unsigned long long ulTransactionTime;
 		unsigned int uiTransactionSequence;
-		unsigned long ulTransactionTime;
 		unsigned int uiSqlCount;
 		SqlStatement * pSqlList;
 		char szTransactionFrom[40];
@@ -85,8 +82,8 @@ namespace dbproxy
 	{
 		char * pLogData;
 		unsigned int uiDataLen;
-		int nLogCategory;
-		int nLogType;
+		unsigned short nLogCategory;
+		unsigned short nLogType;
 		tagLogContext()
 		{
 			uiDataLen = 0;
@@ -107,12 +104,12 @@ namespace dbproxy
 	typedef struct tagRemoteLinkInfo
 	{
 		int nActive;
-		unsigned long ulLastActiveTime;
+		unsigned long long ulLastActiveTime;
 	} RemoteLinkInfo;
 
 	typedef struct tagUpdatePipeTask
 	{
-		unsigned long ulUpdateTaskTime;
+		unsigned long long ulUpdateTaskTime;
 	} UpdatePipeTask;
 
 	enum eUpdatePipeState
@@ -124,27 +121,28 @@ namespace dbproxy
 
 }
 
+using namespace escort;
 
 class DbProxy
 {
 public:
 	DbProxy(const char * pZkHost, const char * pRoot);
 	~DbProxy();
-	int Start(const char * pHost, unsigned short usReceptPort, const char * pMidwareHost, 
-		unsigned short usPublishPort, unsigned short usContactPort, unsigned short usCollectPort,
-		const char * pDbHost, const char * pDbUser, const char * pDbPasswd, const char * pDataSample, 
-		const char * pDataSample2);
+	int Start(const char * pHost, unsigned short usReceptPort, const char * pMidwareHost, unsigned short usPublishPort,
+		unsigned short usContactPort, unsigned short usCollectPort, const char * pMasterDbHost, const char * pMasterDbUser,
+		const char * pMasterDbPasswd, unsigned short usMasterDbPort, const char * pSlaveDbHost, const char * pSlaveDbUser,
+		const char * pSlaveDbPasswd, unsigned short usSlaveDbPort, const char * pDataSample, const char * pDataSample2);
 	int Stop();
 	int GetState();
 	void SetLogType(unsigned short usLogType);
 private:
 	int m_nRun;
 	//mq
-	zctx_t * m_ctx;
-	void * m_reception; //ROUTER
-	void * m_subscriber; 
-	void * m_interactor;
-	void * m_pipeline;  
+	zsock_t * m_reception; //ROUTER
+	zsock_t * m_subscriber; 
+	zsock_t * m_interactor; 
+	zsock_t * m_pipeline;  //collect
+
 	pthread_t m_pthdNetwork;
 	char m_szPipelineIdentity[40];
 
@@ -161,6 +159,10 @@ private:
 	MYSQL * m_locateConn; //escort locate
 	MYSQL * m_updateConn;
 	pthread_mutex_t m_mutex4ReadConn;
+	pthread_mutex_t m_mutex4WriteConn;
+	pthread_mutex_t m_mutex4LocateConn;
+	pthread_mutex_t m_mutex4UpdateConn;
+
 	std::queue<dbproxy::SqlTransaction *> m_sqlQueryQue;
 	std::queue<dbproxy::SqlTransaction *> m_sqlExecuteQue;
 	std::queue<dbproxy::SqlTransaction *> m_sqlLocateQue;  //escort_locate
@@ -192,28 +194,24 @@ private:
 	static int g_nRefCount;
 	static unsigned int g_uiInteractSequence;
 	static pthread_mutex_t g_mutex4InteractSequence;
-	static unsigned short g_usPipeSequence;
+	static unsigned int g_uiPipeSequence;
 	static pthread_mutex_t g_mutex4PipeSequence;
 	static BOOL g_bLoadSql;
 	//static char g_szLastUpdateTime[20]; 
-	static int g_nUpdatePipeState; //更新管道状态
+	static int g_nUpdatePipeState; //0, 1
 	static pthread_mutex_t g_mutex4PipeState;
-	static unsigned long g_ulLastUpdateTime;
+	static unsigned long long g_ulLastUpdateTime;
 	static pthread_mutex_t g_mutex4UpdateTime;
 
 	pthread_mutex_t m_mutex4UpdatePipe; 
 	pthread_cond_t m_cond4UpdatePipe; 
 	std::queue<dbproxy::UpdatePipeTask *> m_updateTaskQue;
-	pthread_t m_pthdUpdatePipe; //更新管道线程
+	pthread_t m_pthdUpdatePipe; //
 
 	//log
-	unsigned int m_uiLogInst;
+	unsigned long long m_ullLogInst;
 	unsigned short m_usLogType;
 	char m_szLogRoot[256];
-	pthread_t m_pthdLog;
-	std::queue<dbproxy::LogContext *> m_logQue;
-	pthread_mutex_t m_mutex4LogQue;
-	pthread_cond_t m_cond4LogQue;
 
 	//topicMessage
 	std::queue<TopicMessage *> m_topicMsgQue;
@@ -233,40 +231,39 @@ private:
 	int m_nTimer4Supervise;
 	int m_nTimerTickCount;
 	
-
 protected:
 	void initLog();
-	bool addLog(dbproxy::LogContext * pLog);
-	void writeLog(const char * pLogContent, int nLogCategoryType, int nLogType);
-	void dealLog();
 
 	bool addSqlTransaction(dbproxy::SqlTransaction *, int);
 	void dealSqlQuery();
 	void dealSqlExec();
 	void dealSqlLocate();
-	void handleSqlExec(dbproxy::SqlStatement *, unsigned int, unsigned long, const char *);
-	void handleSqlQry(const dbproxy::SqlStatement *, unsigned int, unsigned long, const char *);
-	void handleSqlLocate(dbproxy::SqlStatement *, unsigned int, unsigned long);
-	void replyQuery(void *, unsigned int, unsigned int, unsigned int, unsigned long, const char *);
+	void handleSqlExec(dbproxy::SqlStatement *, unsigned int, unsigned long long, const char *);
+	void handleSqlQry(const dbproxy::SqlStatement *, unsigned int, unsigned long long, const char *);
+	void handleSqlLocate(dbproxy::SqlStatement *, unsigned int, unsigned long long);
+	void replyQuery(void *, unsigned int, unsigned int, unsigned int, unsigned long long, const char *);
 
 	void dealNetwork();
 	bool addTopicMsg(TopicMessage * pMsg);
 	void dealTopicMsg();
-	void storeTopicMsg(TopicMessage * pMsg, unsigned long);
-	int handleTopicAliveMsg(TopicAliveMessage *);
-	int handleTopicOnlineMsg(TopicOnlineMessage *);
-	int handleTopicOfflineMsg(TopicOfflineMessage *);
+	void storeTopicMsg(TopicMessage * pMsg, unsigned long long);
+	int handleTopicDeviceAliveMsg(TopicAliveMessage *);
+	int handleTopicDeviceOnlineMsg(TopicOnlineMessage *);
+	int handleTopicDeviceOfflineMsg(TopicOfflineMessage *);
 	int handleTopicBindMsg(TopicBindMessage *);
 	int handleTopicTaskSubmitMsg(TopicTaskMessage *);
 	int handleTopicTaskCloseMsg(TopicTaskCloseMessage *);
 	int handleTopicTaskModifyMsg(TopicTaskModifyMessage *);
 	int handleTopicGpsLocateMsg(TopicLocateMessageGps *);
 	int handleTopicLbsLocateMsg(TopicLocateMessageLbs *);
-	int handleTopicBtLocateMsg(TopicLocateMessageBt *);
+	int handleTopicAppLocateMsg(TopicLocateMessageApp *);
 	int handleTopicLowpoweAlarmMsg(TopicAlarmMessageLowpower *);
 	int handleTopicLooseAlarmMsg(TopicAlarmMessageLoose *);
 	int handleTopicFleeAlarmMsg(TopicAlarmMessageFlee *);
 	int handleTopicFenceAlarmMsg(TopicAlarmMessageFence *);
+	int handleTopicLocateLostAlarmMsg(TopicAlarmMessageLocateLost *);
+	int handleTopicPeerFenceAlarmMsg(TopicAlarmMessagePeerFence *);
+	int handleTopicDeviceChargeMsg(TopicDeviceChargeMessage *);
 
 	bool addInteractMsg(InteractionMessage *);
 	void dealInteractMsg();
@@ -275,9 +272,8 @@ protected:
 	bool makePerson(const char *, Person *);
 	void changeDeviceStatus(unsigned short usNewStatus, unsigned short & usDeviceStatus, int nMode = 0);
 	unsigned int getNextInteractSequence();
-	unsigned short getNextPipeSequence();
+	unsigned int getNextPipeSequence();
 
-	
 	void initZookeeper();
 	int competeForMaster();
 	void masterExist();
@@ -294,7 +290,12 @@ protected:
 	void setPipeState(int);
 	
 	friend int supervise(zloop_t *, int, void *);
-	friend void * dealLogThread(void *);
+	friend int readSubscriber(zloop_t *, zsock_t * reader_, void *);
+	friend int readPipeline(zloop_t *, zsock_t * reader_, void *);
+	friend int readInteractor(zloop_t *, zsock_t *, void *);
+	friend int readReception(zloop_t *, zsock_t *, void *);
+
+	//friend void * dealLogThread(void *);
 	friend void * dealSqlQueryThread(void *);
 	friend void * dealSqlExecThread(void *);
 	friend void * dealSqlLocateThread(void *);
@@ -312,6 +313,7 @@ protected:
 	friend void zk_dbproxy_master_exists_completion(int, const Stat *, const void *);
 	friend void zk_dbproxy_slaver_create_completion(int, const char *, const void *);
 	friend void zk_dbproxy_set_completion(int, const Stat *, const void *);
+
 
 
 };

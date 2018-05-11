@@ -17,6 +17,15 @@ namespace escort_db
 		E_OPT_DELETE = 3,
 	};
 
+	enum eEscortDBKeyQueryDescription
+	{
+		E_KEY_EQUAL = 0,    // = key
+		E_KEY_NOT_EQUAL = 1, // != key
+		E_KEY_LIKE_FORE = 2, // %key
+		E_KEY_LIEK_TAIL = 3, // key%
+		E_KEY_LIKE_FORETAIL = 4, //%key%
+	};
+
 	enum eEsortDBTable
 	{
 		E_TBL_UNDEFINE = 0,
@@ -32,6 +41,7 @@ namespace escort_db
 		E_TBL_CAMERA = 10,			//camera_info
 		E_TBL_FENCE = 11,				//fence_info
 		E_TBL_TASK_FENCE = 12,	//fence_task_info
+		E_TBL_DEVICE_CHARGE = 13, //device_charge_info
 	};
 
 	enum eEscortDBAlarmType
@@ -41,6 +51,8 @@ namespace escort_db
 		E_ALMTYPE_LOWPOWER = 2,
 		E_ALMTYPE_LOOSE = 3,
 		E_ALMTYPE_FENCE = 4,
+		E_ALMTYPE_LOST_LOCATE = 5,
+		E_ALMTYPE_PEER_OVERBOUNDARY = 6,
 	};
 
 	enum eEscortDBLocateType
@@ -60,10 +72,11 @@ namespace escort_db
 
 	typedef struct tagSqlContainer
 	{
+		unsigned long long ulSqlOptTime;
 		unsigned int uiSqlOptSeq;
-		unsigned long ulSqlOptTime;
 		unsigned short usSqlOptTarget;	//db-table
-		unsigned short usSqlOptType;		//dbOperate
+		unsigned short usSqlOptType: 8;		//dbOperate
+		unsigned short usSqlKeyDesp : 8;
 		char szSqlOptKey[64];
 		unsigned int uiResultCount;
 		unsigned int uiResultLen;
@@ -135,11 +148,15 @@ namespace escort_db
 		char szLastLocation[20];
 		double dLat;
 		double dLng;
-		int nLocationType;
+		int nLocationType : 16;
+		int nCoordinate : 16;
 		unsigned short usIsUse;
 		unsigned short usBattery;
 		unsigned short usOnline;
 		unsigned short usIsRemove;
+		int nMnc : 16;
+		int nCharge : 16;
+		char szImei[20];
 		tagSqlDevice()
 		{
 			szDeviceId[0] = '\0';
@@ -149,6 +166,10 @@ namespace escort_db
 			szLastLocation[0] = '\0';
 			dLat = dLng = 0.000000;
 			usIsRemove = 0;
+			nMnc = 0;
+			nCharge = 0;
+			nCoordinate = 0;
+			szImei[0] = '\0';
 		}
 	} SqlDevice;
 
@@ -171,9 +192,9 @@ namespace escort_db
 		unsigned short usMsgType;
 		unsigned short usMsgSeq;
 		char szMsgUuid[40];
-		char szMsgBody[256];
+		char szMsgBody[512];
 		char szMsgFrom[40];
-		unsigned long ulMsgTime;
+		unsigned long long ulMsgTime;
 		tagSqlMessage()
 		{
 			szMsgTopic[0] = '\0';
@@ -207,7 +228,9 @@ namespace escort_db
 	{
 		int nFenceTaskId;
 		int nFenceId;
-		int nTaskState;          //0-unfinish;1-finish
+		int nTaskState: 16;//0-unfinish;1-finish;2-ignore
+		int nFencePolicy: 8;//0:in fence alram;1:out fence alarm
+		int nPeerCheck : 8;
 		char szFactoryId[4];
 		char szDeviceId[16];
 		char szTaskStartTime[20];
@@ -217,6 +240,7 @@ namespace escort_db
 			nFenceTaskId = 0;
 			nFenceId = 0;
 			nTaskState = 0;
+			nFencePolicy = 0;
 			szFactoryId[0] = '\0';
 			szDeviceId[0] = '\0';
 			szTaskStartTime[0] = '\0';

@@ -8,7 +8,7 @@
 typedef std::map<std::string, std::string> KVStringPair;
 
 static char g_szDllDir[256] = { 0 };
-std::map<unsigned int, DbProxy *> g_instList;
+std::map<unsigned long long, DbProxy *> g_instList;
 pthread_mutex_t g_mutex4InstList;
 
 int loadConf(const char *, KVStringPair &);
@@ -33,7 +33,7 @@ BOOL APIENTRY DllMain(void * hInst, unsigned long ulReason, void * pReserved)
 		case DLL_PROCESS_DETACH: {
 			pthread_mutex_lock(&g_mutex4InstList);
 			if (!g_instList.empty()) {
-				std::map<unsigned int, DbProxy *>::iterator iter = g_instList.begin();
+				std::map<unsigned long long, DbProxy *>::iterator iter = g_instList.begin();
 				do {
 					DbProxy * pProxy = iter->second;
 					if (pProxy) {
@@ -106,9 +106,9 @@ char * readItem(KVStringPair kvList_, const char * pItem_)
 	return NULL;
 }
 
-DB_API unsigned int __stdcall DbProxy_Start(const char * pCfgFileName_)
+unsigned long long __stdcall DbProxy_Start(const char * pCfgFileName_)
 {
-	unsigned int result = 0;
+	unsigned long long result = 0;
 	if (strlen(g_szDllDir)) {
 		char szFileName[256] = { 0 };
 		if (pCfgFileName_ && strlen(pCfgFileName_)) {
@@ -131,6 +131,11 @@ DB_API unsigned int __stdcall DbProxy_Start(const char * pCfgFileName_)
 			char * pDbPasswd = readItem(kvList, "db_passwd");
 			char * pDbMajorSample = readItem(kvList, "db_major_sample");
 			char * pDbLocateSample = readItem(kvList, "db_locate_sample");
+			char * pDbUsePort = readItem(kvList, "db_port");
+			char * pSlaveDbHost = readItem(kvList, "db_slave_host_ip");
+			char * pSlaveDbUser = readItem(kvList, "db_slave_user");
+			char * pSlaveDbPasswd = readItem(kvList, "db_slave_passwd");
+			char * pSlaveDbPort = readItem(kvList, "db_slave_port");
 			char szZkHost[256] = { 0 };
 			char szMidwareHost[32] = { 0 };
 			unsigned short usMidwarePublishPort = 0;
@@ -138,9 +143,14 @@ DB_API unsigned int __stdcall DbProxy_Start(const char * pCfgFileName_)
 			unsigned short usMidwareCollectPort = 0;
 			char szDbProxyHost[32] = { 0 };
 			unsigned short usDbProxyQryPort = 0;
-			char szDbHost[32] = { 0 };
-			char szDbUser[32] = { 0 };
-			char szDbPasswd[64] = { 0 };
+			char szMasterDbHost[32] = { 0 };
+			char szMasterDbUser[32] = { 0 };
+			char szMasterDbPasswd[64] = { 0 };
+			unsigned short usMasterDbPort = 0;
+			char szSlaveDbHost[32] = { 0 };
+			char szSlaveDbUser[32] = { 0 };
+			char szSlaveDbPasswd[64] = { 0 };
+			unsigned short usSlaveDbPort = 0;
 			char szDbMajorSample[32] = { 0 };
 			char szDbLocateSample[32] = { 0 };
 			if (pZkHost) {
@@ -179,17 +189,17 @@ DB_API unsigned int __stdcall DbProxy_Start(const char * pCfgFileName_)
 				pDbProxyQryPort = NULL;
 			}
 			if (pDbHost) {
-				strncpy_s(szDbHost, sizeof(szDbHost), pDbHost, strlen(pDbHost));
+				strncpy_s(szMasterDbHost, sizeof(szMasterDbHost), pDbHost, strlen(pDbHost));
 				free(pDbHost);
 				pDbHost = NULL;
 			}
 			if (pDbUser) {
-				strncpy_s(szDbUser, sizeof(szDbUser), pDbUser, strlen(pDbUser));
+				strncpy_s(szMasterDbUser, sizeof(szMasterDbUser), pDbUser, strlen(pDbUser));
 				free(pDbUser);
 				pDbUser = NULL;
 			}
 			if (pDbPasswd) {
-				strncpy_s(szDbPasswd, sizeof(szDbPasswd), pDbPasswd, strlen(pDbPasswd));
+				strncpy_s(szMasterDbPasswd, sizeof(szMasterDbPasswd), pDbPasswd, strlen(pDbPasswd));
 				free(pDbPasswd);
 				pDbPasswd = NULL;
 			}
@@ -203,16 +213,45 @@ DB_API unsigned int __stdcall DbProxy_Start(const char * pCfgFileName_)
 				free(pDbLocateSample);
 				pDbLocateSample = NULL;
 			}
+			if (pDbUsePort) {
+				usMasterDbPort = (unsigned short)atoi(pDbUsePort);
+				free(pDbUsePort);
+				pDbUsePort = NULL;
+			}
+			if (pSlaveDbHost) {
+				strcpy_s(szSlaveDbHost, sizeof(szSlaveDbHost), pSlaveDbHost);
+				free(pSlaveDbHost);
+				pSlaveDbHost = NULL;
+			}
+			if (pSlaveDbUser) {
+				strcpy_s(szSlaveDbUser, sizeof(szSlaveDbUser), pSlaveDbUser);
+				free(pSlaveDbUser);
+				pSlaveDbUser = NULL;
+			}
+			if (pSlaveDbPasswd) {
+				strcpy_s(szSlaveDbPasswd, sizeof(szSlaveDbPasswd), pSlaveDbPasswd);
+				free(pSlaveDbPasswd);
+				pSlaveDbPasswd = NULL;
+			}
+			if (pSlaveDbPort) {
+				usSlaveDbPort = (unsigned short)atoi(pSlaveDbPort);
+				free(pSlaveDbPort);
+				pSlaveDbPort = NULL;
+			}
 			DbProxy * pInst = new DbProxy(szZkHost, g_szDllDir);
 			if (pInst) {
-				if (pInst->Start(szDbProxyHost, usDbProxyQryPort, szMidwareHost, usMidwarePublishPort,
-					usMidwareTalkPort, usMidwareCollectPort, szDbHost, szDbUser, szDbPasswd, szDbMajorSample, 
-					szDbLocateSample) == 0) {
-					unsigned int uiInst = (unsigned int)pInst;
+				if (pInst->Start(szDbProxyHost, usDbProxyQryPort, szMidwareHost, usMidwarePublishPort, usMidwareTalkPort,
+					usMidwareCollectPort, szMasterDbHost, szMasterDbUser, szMasterDbPasswd, usMasterDbPort, 
+					strlen(szSlaveDbHost) == 0 ? szMasterDbHost : szSlaveDbHost, 
+					strlen(szSlaveDbUser) == 0 ? szMasterDbUser : szSlaveDbUser, 
+					strlen(szSlaveDbPasswd) == 0 ? szMasterDbPasswd: szSlaveDbPasswd, 
+					usSlaveDbPort == 0 ? usMasterDbPort : usSlaveDbPort, 
+					szDbMajorSample, szDbLocateSample) == 0) {
+					unsigned long long ullInst = (unsigned long long)pInst;
 					pthread_mutex_lock(&g_mutex4InstList);
-					g_instList.insert(std::make_pair(uiInst, pInst));
+					g_instList.insert(std::make_pair(ullInst, pInst));
 					pthread_mutex_unlock(&g_mutex4InstList);
-					result = uiInst;
+					result = ullInst;
 				} else {
 					delete pInst;
 					pInst = NULL;
@@ -223,12 +262,12 @@ DB_API unsigned int __stdcall DbProxy_Start(const char * pCfgFileName_)
 	return result;
 }
 
-DB_API int __stdcall DbProxy_Stop(unsigned int uiInst_)
+int __stdcall DbProxy_Stop(unsigned long long ullInst_)
 {
 	int result = -1;
 	pthread_mutex_lock(&g_mutex4InstList);
 	if (!g_instList.empty()) {
-		std::map<unsigned int, DbProxy *>::iterator iter = g_instList.find(uiInst_);
+		std::map<unsigned long long, DbProxy *>::iterator iter = g_instList.find(ullInst_);
 		if (iter != g_instList.end()) {
 			DbProxy * pInst = iter->second;
 			if (pInst) {
@@ -244,16 +283,16 @@ DB_API int __stdcall DbProxy_Stop(unsigned int uiInst_)
 	return result;
 }
 
-DB_API int __stdcall DbProxy_SetLogType(unsigned int uiInst_, int nLogType_)
+int __stdcall DbProxy_SetLogType(unsigned long long ullInst_, unsigned short usLogType_)
 {
 	int result = -1;
 	pthread_mutex_lock(&g_mutex4InstList);
 	if (!g_instList.empty()) {
-		std::map<unsigned int, DbProxy *>::iterator iter = g_instList.find(uiInst_);
+		std::map<unsigned long long, DbProxy *>::iterator iter = g_instList.find(ullInst_);
 		if (iter != g_instList.end()) {
 			DbProxy * pInst = iter->second;
 			if (pInst) {
-				pInst->SetLogType(nLogType_);
+				pInst->SetLogType(usLogType_);
 				result = 0;
 			}
 		}

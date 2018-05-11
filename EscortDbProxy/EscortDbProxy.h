@@ -11,9 +11,9 @@ extern "C"
 #else 
 #define DB_API __declspec(dllexport)
 #endif
-	DB_API unsigned int __stdcall DbProxy_Start(const char * pCfgFileName = 0);
-	DB_API int __stdcall DbProxy_Stop(unsigned int);
-	DB_API int __stdcall DbProxy_SetLogType(unsigned int, int);
+	unsigned long long __stdcall DbProxy_Start(const char * pCfgFileName = 0);
+	int __stdcall DbProxy_Stop(unsigned long long);
+	int __stdcall DbProxy_SetLogType(unsigned long long, unsigned short);
 #ifdef __cplusplus
 }
 #endif
