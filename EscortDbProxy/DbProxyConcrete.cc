@@ -1,4 +1,4 @@
-#include "DbProxyConcrete.h"
+﻿#include "DbProxyConcrete.h"
 
 zhash_t * DbProxy::g_deviceList = NULL;
 zhash_t * DbProxy::g_guarderList = NULL;
@@ -3716,10 +3716,8 @@ int DbProxy::handleTopicDeviceAliveMsg(TopicAliveMessage * pAliveMsg_)
 		bool bLastest = false;
 		bool bUpdateState = false;
 		pthread_mutex_lock(&g_mutex4DevList);
-		    //pAliveMsg_->szDeviceId
 		if (zhash_size(g_deviceList)) {
-			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, 
-				pAliveMsg_->szDeviceId);
+			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pAliveMsg_->szDeviceId);
 			if (pDev) {
 				if (pDev->deviceBasic.nOnline == 0) {
 					pDev->deviceBasic.nOnline = 1;
@@ -3747,12 +3745,13 @@ int DbProxy::handleTopicDeviceAliveMsg(TopicAliveMessage * pAliveMsg_)
 		if (bLastest) {
 			char szSqlDatetime[20] = { 0 };
 			format_sqldatetime(pAliveMsg_->ulMessageTime, szSqlDatetime, sizeof(szSqlDatetime));
+			char szSqlNow[20] = { 0 };
+			format_sqldatetime(time(NULL), szSqlNow, sizeof(szSqlNow));
 			char szDevSql[512] = { 0 };
-			snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastCommuncation='%s', "
-				"Power=%u, Online=1 where DeviceID='%s';", szSqlDatetime, pAliveMsg_->usBattery,
+			snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastCommuncation='%s', Power=%u, Online=1, "
+				"lastOptTime='%s' where DeviceID='%s';", szSqlDatetime, pAliveMsg_->usBattery, szSqlNow, 
 				pAliveMsg_->szDeviceId);
-			dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
-				sizeof(dbproxy::SqlTransaction));
+			dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(sizeof(dbproxy::SqlTransaction));
 			pTransaction->szTransactionFrom[0] = '\0';
 			pTransaction->uiSqlCount = 1;
 			pTransaction->uiTransactionSequence = getNextInteractSequence();
@@ -3967,8 +3966,7 @@ int DbProxy::handleTopicBindMsg(TopicBindMessage * pBindMsg_)
 	if (pBindMsg_) {
 		pthread_mutex_lock(&g_mutex4DevList);
 		if (zhash_size(g_deviceList)) {
-			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, 
-				pBindMsg_->szDeviceId);
+			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pBindMsg_->szDeviceId);
 			if (pDev) {
 				result = 0;
 				strncpy_s(pDev->szBindGuard, sizeof(pDev->szBindGuard), pBindMsg_->szGuarder, 
@@ -3996,11 +3994,9 @@ int DbProxy::handleTopicBindMsg(TopicBindMessage * pBindMsg_)
 		char szSqlNow[20] = { 0 };
 		format_sqldatetime((unsigned long long)time(NULL), szSqlNow, sizeof(szSqlNow));
 		char szDevSql[512] = { 0 };
-		snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastCommuncation='%s', Power=%u"
-			" , LastOptTime='%s' where DeviceID='%s';", szSqlDatetime, pBindMsg_->usBattery,
-			szSqlNow, pBindMsg_->szDeviceId);
-		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
-			sizeof(dbproxy::SqlTransaction));
+		snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastCommuncation='%s', Power=%u, LastOptTime='%s'"
+			" where DeviceID='%s';", szSqlDatetime, pBindMsg_->usBattery, szSqlNow, pBindMsg_->szDeviceId);
+		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(sizeof(dbproxy::SqlTransaction));
 		pTransaction->szTransactionFrom[0] = '\0';
 		pTransaction->uiSqlCount = 1;
 		pTransaction->uiTransactionSequence = getNextInteractSequence();
@@ -4051,8 +4047,8 @@ int DbProxy::handleTopicTaskSubmitMsg(TopicTaskMessage * pTaskMsg_)
 			} 
 			pTask->nTaskState = 0;
 			pTask->nTaskFlee = 0;
-			pTask->nTaskLimitDistance = (uint8_t)pTaskMsg_->usTaskLimit;
-			pTask->nTaskType = (uint8_t)pTaskMsg_->usTaskType;
+			pTask->nTaskLimitDistance = pTaskMsg_->usTaskLimit;
+			pTask->nTaskType = pTaskMsg_->usTaskType;
 			format_datetime(pTaskMsg_->ulMessageTime, pTask->szTaskStartTime, sizeof(pTask->szTaskStartTime));
 			pTask->szTaskStopTime[0] = '\0';
 			pthread_mutex_lock(&g_mutex4TaskList);
@@ -4065,7 +4061,8 @@ int DbProxy::handleTopicTaskSubmitMsg(TopicTaskMessage * pTaskMsg_)
 		Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, pTaskMsg_->szGuarder);
 		if (pGuarder) {
 			pGuarder->usState = STATE_GUARDER_DUTY;
-			strcpy_s(pGuarder->szTaskId, sizeof(pGuarder->szTaskId), pTaskMsg_->szTaskId) ;
+			strcpy_s(pGuarder->szTaskId, sizeof(pGuarder->szTaskId), pTaskMsg_->szTaskId);
+			strcpy_s(pGuarder->szBindDevice, sizeof(pGuarder->szBindDevice), pTaskMsg_->szDeviceId);
 		}
 		pthread_mutex_unlock(&g_mutex4GuarderList);
 
@@ -4074,6 +4071,7 @@ int DbProxy::handleTopicTaskSubmitMsg(TopicTaskMessage * pTaskMsg_)
 		if (pDev) {
 			pDev->deviceBasic.ulLastActiveTime = pTaskMsg_->ulMessageTime;
 			changeDeviceStatus(DEV_GUARD, pDev->deviceBasic.nStatus);
+			strcpy_s(pDev->szBindGuard, sizeof(pDev->szBindGuard), pTaskMsg_->szGuarder);
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
 		
@@ -4081,7 +4079,7 @@ int DbProxy::handleTopicTaskSubmitMsg(TopicTaskMessage * pTaskMsg_)
 		Person person;
 		bool bNewPerson = false;
 		if (makePerson(pTaskMsg_->szTarget, &person)) {
-			strncpy_s(szPersonId, sizeof(szPersonId), person.szPersonId, strlen(person.szPersonId));
+			strcpy_s(szPersonId, sizeof(szPersonId), person.szPersonId);
 			pthread_mutex_lock(&g_mutex4PersonList);
 			Person * pPerson = (Person *)zhash_lookup(g_personList, person.szPersonId);
 			if (!pPerson) {
@@ -4105,25 +4103,26 @@ int DbProxy::handleTopicTaskSubmitMsg(TopicTaskMessage * pTaskMsg_)
 		char szTaskSql[1024] = { 0 };
 		char szDevSql[512] = { 0 };
 		char szPersonSql[512] = { 0 };
-		snprintf(szTaskSql, sizeof(szTaskSql), "insert into task_info (TaskID, TaskType, LimitDistance"
-			", StartTime, Destination, UserID, TaskState, PersonID, DeviceID, Handset, TaskMode) values "
-			"('%s', %u, %u, '%s', '%s', '%s', 0, '%s', '%s', '%s', %d);", pTask->szTaskId, pTask->nTaskType, 
-			pTask->nTaskLimitDistance, szSqlDatetime, pTask->szDestination, pTask->szGuarder, szPersonId,
-			pTask->szDeviceId, pTask->szHandset, pTask->nTaskMode);
-		snprintf(szDevSql, sizeof(szDevSql), "update device_info set IsUse=1, LastCommuncation='%s', "
-			"LastOptTime='%s' where DeviceID='%s';", szSqlDatetime, szSqlNow, pTaskMsg_->szDeviceId);
+		snprintf(szTaskSql, sizeof(szTaskSql), "insert into task_info (TaskID, TaskType, LimitDistance, StartTime, "
+			"Destination, UserID, TaskState, PersonID, DeviceID, Handset, TaskMode) values ('%s', %u, %u, '%s', '%s', "
+			"'%s', 0, '%s', '%s', '%s', %d);", pTask->szTaskId, pTask->nTaskType, pTask->nTaskLimitDistance, szSqlDatetime,
+			pTask->szDestination, pTask->szGuarder, szPersonId, pTask->szDeviceId, pTask->szHandset, pTask->nTaskMode);
+		sprintf_s(szDevSql, sizeof(szDevSql), "update device_info set IsUse=1, LastCommuncation='%s', LastOptTime='%s' "
+			"where DeviceID='%s';", szSqlDatetime, szSqlNow, pTaskMsg_->szDeviceId);
 		if (bNewPerson) {
-			snprintf(szPersonSql, sizeof(szPersonSql), "insert into person_info (PersonID, PersonName, "
-				"IsEscorting) values ('%s', '%s', 1);", person.szPersonId, person.szPersonName);
+			snprintf(szPersonSql, sizeof(szPersonSql), "insert into person_info (PersonID, PersonName, IsEscorting) values"
+				" ('%s', '%s', 1);", person.szPersonId, 
+				strlen(person.szPersonName) == 0 ? person.szPersonId : person.szPersonName);
 		}
 		else {
-			snprintf(szPersonSql, sizeof(szPersonSql), "update person_info set PersonName=%s, IsEscorting=1 "
-				"where PersonID='%s';", person.szPersonId, person.szPersonName);
+			snprintf(szPersonSql, sizeof(szPersonSql), "update person_info set PersonName='%s', IsEscorting=1 "
+				"where PersonID='%s';", strlen(person.szPersonName) == 0 ? person.szPersonId : person.szPersonName, 
+				person.szPersonId);
 		}
 		char szTaskExtraSql[512] = { 0 };
 		if (pTask->nTaskMode == 1) {
-			snprintf(szTaskExtraSql, sizeof(szTaskExtraSql), "insert into task_extra_info(TaskId, Handset,"
-				"StartTime) value ('%s', '%s', '%s');", pTask->szTaskId, pTask->szHandset, szSqlDatetime);
+			snprintf(szTaskExtraSql, sizeof(szTaskExtraSql), "insert into task_extra_info(TaskId, Handset, StartTime) "
+				"values ('%s', '%s', '%s');", pTask->szTaskId, pTask->szHandset, szSqlDatetime);
 		}
 		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
 			sizeof(dbproxy::SqlTransaction));
@@ -4206,15 +4205,23 @@ int DbProxy::handleTopicTaskCloseMsg(TopicTaskCloseMessage * pCloseTaskMsg_)
 		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, szDeviceId);
 		if (pDev) {
 			changeDeviceStatus(DEV_ONLINE, pDev->deviceBasic.nStatus);
+			if (pDev->deviceBasic.nLooseStatus == 1) {
+				pDev->deviceBasic.nStatus += DEV_LOOSE;
+			}
+			if (pDev->deviceBasic.nBattery < BATTERY_THRESHOLD) {
+				pDev->deviceBasic.nStatus += DEV_LOWPOWER;
+			}
 			pDev->deviceBasic.ulLastActiveTime = pCloseTaskMsg_->ulMessageTime;
+			pDev->szBindGuard[0] = '\0';
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
 
 		pthread_mutex_lock(&g_mutex4GuarderList);
 		Guarder * pGuarder = (Guarder *)zhash_lookup(g_guarderList, szGuarder);
 		if (pGuarder) {
-			pGuarder->usState = STATE_GUARDER_BIND;
+			pGuarder->usState = STATE_GUARDER_FREE;
 			pGuarder->szTaskId[0] = '\0';
+			pGuarder->szBindDevice[0] = '\0';
 		}
 		pthread_mutex_unlock(&g_mutex4GuarderList);
 
@@ -4223,13 +4230,12 @@ int DbProxy::handleTopicTaskCloseMsg(TopicTaskCloseMessage * pCloseTaskMsg_)
 		char szSqlNow[20] = { 0 };
 		format_sqldatetime((unsigned long long)time(NULL), szSqlNow, sizeof(szSqlNow));
 		char szTaskSql[512] = { 0 };
-		snprintf(szTaskSql, sizeof(szTaskSql), "update task_info set EndTime='%s', TaskState=%d "
-			"where TaskID='%s';", szSqlDatetime, pCloseTaskMsg_->nClose, pCloseTaskMsg_->szTaskId);
+		snprintf(szTaskSql, sizeof(szTaskSql), "update task_info set EndTime='%s', TaskState=%d where TaskID='%s';",
+			szSqlDatetime, pCloseTaskMsg_->nClose, pCloseTaskMsg_->szTaskId);
 		char szDevSql[512] = { 0 };
-		snprintf(szDevSql, sizeof(szDevSql), "update device_info set IsUse=0, LastCommuncation='%s',"
-			" LastOptTime='%s' where DeviceID='%s';", szSqlDatetime, szSqlNow, szDeviceId);
-		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(
-			sizeof(dbproxy::SqlTransaction));
+		snprintf(szDevSql, sizeof(szDevSql), "update device_info set IsUse=0, LastCommuncation='%s', LastOptTime='%s' "
+			"where DeviceID='%s';", szSqlDatetime, szSqlNow, szDeviceId);
+		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(sizeof(dbproxy::SqlTransaction));
 		char szPersonSql[256] = { 0 };
 		if (strlen(person.szPersonId)) {
 			pthread_mutex_lock(&g_mutex4PersonList);
@@ -4238,15 +4244,14 @@ int DbProxy::handleTopicTaskCloseMsg(TopicTaskCloseMessage * pCloseTaskMsg_)
 				pPerson->nFlee = 0;
 			}
 			pthread_mutex_unlock(&g_mutex4PersonList);
-			snprintf(szPersonSql, sizeof(szPersonSql), "update person_info set IsEscorting=0 where "
-				"PersonID='%s';", person.szPersonId);
+			snprintf(szPersonSql, sizeof(szPersonSql), "update person_info set IsEscorting=0 where PersonID='%s';", 
+				person.szPersonId);
 		}
 		char szTaskExtraSql[512] = { 0 };
 		bool bUpdateExtraTask = false;
 		if (nTaskMode == 1 && strlen(szHandset)) {
-			snprintf(szTaskExtraSql, sizeof(szTaskExtraSql), "update task_extra_info set StopTime"
-				"='%s' where TaskId='%s' and Handset='%s' and StopTime is null;", szSqlDatetime,
-				pCloseTaskMsg_->szTaskId, szHandset);
+			snprintf(szTaskExtraSql, sizeof(szTaskExtraSql), "update task_extra_info set StopTime ='%s' where TaskId='%s' "
+				"and Handset='%s' and StopTime is null;", szSqlDatetime, pCloseTaskMsg_->szTaskId, szHandset);
 			bUpdateExtraTask = true;
 		}
 
@@ -4336,8 +4341,8 @@ int DbProxy::handleTopicTaskModifyMsg(TopicTaskModifyMessage * pModifyMsg_)
 			char szTaskSql[256] = { 0 };
 			unsigned int nCount = 0;
 			if (bChangeMode) {
-				sprintf_s(szTaskSql, sizeof(szTaskSql), "update task_info set TaskMode = 1, Handset='%s' "
-					"where TaskID='%s';", pModifyMsg_->szHandset, pModifyMsg_->szTaskId);
+				sprintf_s(szTaskSql, sizeof(szTaskSql), "update task_info set TaskMode = 1, Handset='%s' where TaskID='%s';",
+					pModifyMsg_->szHandset, pModifyMsg_->szTaskId);
 				nCount++;
 			}
 			else {
@@ -4347,16 +4352,15 @@ int DbProxy::handleTopicTaskModifyMsg(TopicTaskModifyMessage * pModifyMsg_)
 			}
 			char szTaskExtraSql1[256] = { 0 };
 			if (strlen(pModifyMsg_->szHandset)) {
-				sprintf_s(szTaskExtraSql1, sizeof(szTaskExtraSql1), "insert into task_extra_info (TaskId, Handset, "
-					"StartTime) value ('%s', '%s', '%s');", pModifyMsg_->szTaskId, pModifyMsg_->szHandset, 
+				sprintf_s(szTaskExtraSql1, sizeof(szTaskExtraSql1), "insert into task_extra_info (TaskId, Handset, StartTime) "
+					"value ('%s', '%s', '%s');", pModifyMsg_->szTaskId, pModifyMsg_->szHandset, 
 					szSqlDateTime);
 				nCount++;
 			}
 			char szTaskExtraSql2[256] = { 0 };
 			if (strlen(szPrevHandset)) {
-				snprintf(szTaskExtraSql2, sizeof(szTaskExtraSql2), "update task_extra_info set StopTime='%s' where"
-					" TaskId='%s' and Handset='%s' and StopTime is null;", szSqlDateTime, pModifyMsg_->szTaskId, 
-					szPrevHandset);
+				snprintf(szTaskExtraSql2, sizeof(szTaskExtraSql2), "update task_extra_info set StopTime='%s' where TaskId='%s' "
+					"and Handset='%s' and StopTime is null;", szSqlDateTime, pModifyMsg_->szTaskId, szPrevHandset);
 				nCount++;
 			}
 			size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
@@ -4381,8 +4385,7 @@ int DbProxy::handleTopicTaskModifyMsg(TopicTaskModifyMessage * pModifyMsg_)
 				pTransaction->pSqlList[i].uiCorrelativeTable = escort_db::E_TBL_TASK_EXTRA;
 				pTransaction->pSqlList[i].uiStatementLen = (unsigned int)nTaskExtraSqlLen1;
 				pTransaction->pSqlList[i].pStatement = (char *)zmalloc(nTaskExtraSqlLen1 + 1);
-				memcpy_s(pTransaction->pSqlList[i].pStatement, nTaskExtraSqlLen1 + 1, szTaskExtraSql1, 
-					nTaskExtraSqlLen1);
+				memcpy_s(pTransaction->pSqlList[i].pStatement, nTaskExtraSqlLen1 + 1, szTaskExtraSql1, nTaskExtraSqlLen1);
 				pTransaction->pSqlList[i].pStatement[nTaskExtraSqlLen1] = '\0';
 				i++;
 			}
@@ -4391,8 +4394,7 @@ int DbProxy::handleTopicTaskModifyMsg(TopicTaskModifyMessage * pModifyMsg_)
 				pTransaction->pSqlList[i].uiCorrelativeTable = escort_db::E_TBL_TASK_EXTRA;
 				pTransaction->pSqlList[i].uiStatementLen = (unsigned int)nTaskExtraSqlLen2;
 				pTransaction->pSqlList[i].pStatement = (char *)zmalloc(nTaskExtraSqlLen2 + 1);
-				memcpy_s(pTransaction->pSqlList[i].pStatement, nTaskExtraSqlLen2 + 1, szTaskExtraSql2, 
-					nTaskExtraSqlLen2);
+				memcpy_s(pTransaction->pSqlList[i].pStatement, nTaskExtraSqlLen2 + 1, szTaskExtraSql2, nTaskExtraSqlLen2);
 				pTransaction->pSqlList[i].pStatement[nTaskExtraSqlLen2] = '\0';
 				i++;
 			}
@@ -4486,21 +4488,18 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 			tm_locateTime.tm_year + 1900, tm_locateTime.tm_mon + 1, tm_locateTime.tm_mday,
 			tm_locateTime.tm_hour, tm_locateTime.tm_min, tm_locateTime.tm_sec);
 		char szLocateSql[256] = { 0 };
-		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, "
-			"IsOut, RecordTime, Latitude, Longitude, Speed, Course, Power, Coordinate) values (%d, '%s', "
-			"'%s', %d, '%s', %.06f, %.06f, %.04f, %d, %u, %d);", szLocateDbName, escort_db::E_LOCATE_GPS,
-			pGpsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pGpsLocateMsg_->dLat,
-			pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, (int)pGpsLocateMsg_->dDirection,
+		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, IsOut, RecordTime, Latitude,"
+			" Longitude, Speed, Course, Power, Coordinate) values (%d, '%s', '%s', %d, '%s', %.06f, %.06f, %.04f, %d, %u, %d);",
+			szLocateDbName, escort_db::E_LOCATE_GPS, pGpsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, 
+			pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, (int)pGpsLocateMsg_->dDirection,
 			pGpsLocateMsg_->usBattery, pGpsLocateMsg_->nCoordinate);
 		char szLocateDbName2[32] = { 0 };
-		snprintf(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d",
-			tm_locateTime.tm_mday);
+		sprintf_s(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d", tm_locateTime.tm_mday);
 		char szLocateSql2[256] = { 0 };
-		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID, "
-			"IsOut, RecordTime, Latitude, Longitude, Speed, Course, Power, Coordinate) values (%d, '%s', "
-			"'%s', %d, '%s', %.06f, %.06f, %.04f, %d, %hu, %d);", szLocateDbName2, escort_db::E_LOCATE_GPS,
-			pGpsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pGpsLocateMsg_->dLat,
-			pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, (int)pGpsLocateMsg_->dDirection,
+		sprintf_s(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID, IsOut, RecordTime, Latitude,"
+			" Longitude, Speed, Course, Power, Coordinate) values (%d, '%s', '%s', %d, '%s', %.06f, %.06f, %.04f, %d, %hu, %d);", 
+			szLocateDbName2, escort_db::E_LOCATE_GPS, pGpsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, 
+			pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, pGpsLocateMsg_->dSpeed, (int)pGpsLocateMsg_->dDirection,
 			pGpsLocateMsg_->usBattery, pGpsLocateMsg_->nCoordinate);
 		size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
 		unsigned long long ulTime = (unsigned long long)time(NULL);
@@ -4509,8 +4508,7 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 		pTransaction->szTransactionFrom[0] = '\0';
 		pTransaction->uiTransactionSequence = getNextInteractSequence();
 		pTransaction->ulTransactionTime = ulTime;
-		pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
-			* sizeof(dbproxy::SqlStatement));
+		pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount * sizeof(dbproxy::SqlStatement));
 		pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_LOCATE;
 		size_t nSqlLen = strlen(szLocateSql);
 		pTransaction->pSqlList[0].uiStatementLen = (unsigned int)nSqlLen;
@@ -4539,7 +4537,7 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 		if (bLastest) {
 			char szSqlNow[20] = { 0 };
 			format_sqldatetime(ulTime, szSqlNow, sizeof(szSqlNow));
-			char szDevSql[256] = { 0 };
+			char szDevSql[512] = { 0 };
 			snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastLocation='%s', Latitude=%.06f, Longitude=%.06f,"
 				" LocationType=%d, Power=%u, Speed=%.04f, Coruse=%d, Coordinate=%d, LastOptTime='%s', LastCommuncation='%s' "
 				"where DeviceID='%s';", szSqlDatetime, pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, escort_db::E_LOCATE_GPS, 
@@ -4550,8 +4548,7 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 			pTransaction2->uiTransactionSequence = getNextInteractSequence();
 			pTransaction2->ulTransactionTime = ulTime;
 			pTransaction2->uiSqlCount = 1;
-			pTransaction2->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction2->uiSqlCount
-				* sizeof(dbproxy::SqlStatement));
+			pTransaction2->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction2->uiSqlCount * sizeof(dbproxy::SqlStatement));
 			pTransaction2->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_DEVICE;
 			size_t nDevSqlLen = strlen(szDevSql);
 			pTransaction2->pSqlList[0].uiStatementLen = (unsigned int)nDevSqlLen;
@@ -4650,26 +4647,22 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 		tm_locateTime.tm_mon += 1;
 		
 		char szLocateDbName[32] = { 0 };
-		snprintf(szLocateDbName, sizeof(szLocateDbName), "data%04d%02d.location_%02d", 
-			tm_locateTime.tm_year, tm_locateTime.tm_mon, tm_locateTime.tm_mday);
+		snprintf(szLocateDbName, sizeof(szLocateDbName), "data%04d%02d.location_%02d", tm_locateTime.tm_year, tm_locateTime.tm_mon,
+			tm_locateTime.tm_mday);
 		char szSqlDatetime[20] = { 0 };
-		snprintf(szSqlDatetime, sizeof(szSqlDatetime), "%04d-%02d-%02d %02d:%02d:%02d",
-			tm_locateTime.tm_year, tm_locateTime.tm_mon, tm_locateTime.tm_mday,
-			tm_locateTime.tm_hour, tm_locateTime.tm_min, tm_locateTime.tm_sec);
+		snprintf(szSqlDatetime, sizeof(szSqlDatetime), "%04d-%02d-%02d %02d:%02d:%02d", tm_locateTime.tm_year, tm_locateTime.tm_mon,
+			tm_locateTime.tm_mday, tm_locateTime.tm_hour, tm_locateTime.tm_min, tm_locateTime.tm_sec);
 		char szLocateSql[256] = { 0 };
-		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, "
-			"IsOut, RecordTime, Latitude, Longitude, Power, Coordinate) values (%d, '%s', '%s', %d, '%s'"
-			", %.06f, %.06f, %u, %d);", szLocateDbName, (int)escort_db::E_LOCATE_LBS, 
-			pLbsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pLbsLocateMsg_->dLat, 
+		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, IsOut, RecordTime, Latitude, "
+			"Longitude, Power, Coordinate) values (%d, '%s', '%s', %d, '%s', %.06f, %.06f, %u, %d);", szLocateDbName, 
+			(int)escort_db::E_LOCATE_LBS,  pLbsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pLbsLocateMsg_->dLat, 
 			pLbsLocateMsg_->dLng, usBattery, pLbsLocateMsg_->nCoordinate);
 		char szLocateSql2[256] = { 0 };
 		char szLocateDbName2[32] = { 0 };
-		snprintf(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d",
-			tm_locateTime.tm_mday);
-		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID,"
-			" IsOut, RecordTime, Latitude, Longitude, Power, Coordinate) values (%d, '%s', '%s', %d, '%s'"
-			", %.06f, %.06f, %u, %d);", szLocateDbName2, (int)escort_db::E_LOCATE_LBS, 
-			pLbsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pLbsLocateMsg_->dLat, 
+		snprintf(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d", tm_locateTime.tm_mday);
+		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID, IsOut, RecordTime, Latitude, "
+			"Longitude, Power, Coordinate) values (%d, '%s', '%s', %d, '%s', %.06f, %.06f, %u, %d);", szLocateDbName2, 
+			(int)escort_db::E_LOCATE_LBS, pLbsLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pLbsLocateMsg_->dLat, 
 			pLbsLocateMsg_->dLng, usBattery, pLbsLocateMsg_->nCoordinate);
 		size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
 		unsigned long long ulTime = (unsigned long long)time(NULL);
@@ -4678,8 +4671,7 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 		pTransaction->szTransactionFrom[0] = '\0';
 		pTransaction->uiTransactionSequence = getNextInteractSequence();
 		pTransaction->ulTransactionTime = ulTime;
-		pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
-			* sizeof(dbproxy::SqlStatement));
+		pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount * sizeof(dbproxy::SqlStatement));
 		pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_LOCATE;
 		size_t nSqlLen = strlen(szLocateSql);
 		pTransaction->pSqlList[0].uiStatementLen = (unsigned int)nSqlLen;
@@ -4707,18 +4699,17 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 		if (bLastest) {
 			char szSqlNow[20] = { 0 };
 			format_sqldatetime(ulTime, szSqlNow, sizeof(szSqlNow));
-			char szDevSql[256] = { 0 };
-			snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastLocation='%s', Latitude=%.06f, "
-				"Longitude=%.06f, LocationType=%d, Power=%u, Speed=0.0000, Coruse=0, Coordinate=%d, LastOptTime='%s', "
-				"LastCommuncation='%s' where DeviceID='%s';", szSqlDatetime, pLbsLocateMsg_->dLat, pLbsLocateMsg_->dLng, 
-				escort_db::E_LOCATE_LBS, usBattery, pLbsLocateMsg_->nCoordinate, szSqlNow, szSqlNow, pLbsLocateMsg_->szDeviceId);
+			char szDevSql[512] = { 0 };
+			snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastLocation='%s', Latitude=%.06f, Longitude=%.06f, "
+				"LocationType=%d, Power=%u, Speed=0.0000, Coruse=0, Coordinate=%d, LastOptTime='%s', LastCommuncation='%s' "
+				"where DeviceID='%s';", szSqlDatetime, pLbsLocateMsg_->dLat, pLbsLocateMsg_->dLng, escort_db::E_LOCATE_LBS, usBattery,
+				pLbsLocateMsg_->nCoordinate, szSqlNow, szSqlNow, pLbsLocateMsg_->szDeviceId);
 			dbproxy::SqlTransaction * pTransaction2 = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
 			pTransaction2->szTransactionFrom[0] = '\0';
 			pTransaction2->uiTransactionSequence = getNextInteractSequence();
 			pTransaction2->ulTransactionTime = ulTime;
 			pTransaction2->uiSqlCount = 1;
-			pTransaction2->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction2->uiSqlCount
-				* sizeof(dbproxy::SqlStatement));
+			pTransaction2->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction2->uiSqlCount * sizeof(dbproxy::SqlStatement));
 			pTransaction2->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_DEVICE;
 			size_t nDevSqlLen = strlen(szDevSql);
 			pTransaction2->pSqlList[0].uiStatementLen = (unsigned int)nDevSqlLen;
@@ -4754,8 +4745,7 @@ int DbProxy::handleTopicAppLocateMsg(TopicLocateMessageApp * pLocateMsg_)
 		unsigned short usBattery = pLocateMsg_->usBattery;
 
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, 
-			pLocateMsg_->szDeviceId);
+		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pLocateMsg_->szDeviceId);
 		if (pDev) {
 			if (strlen(pDev->szBindGuard)) {
 				strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
@@ -4804,18 +4794,17 @@ int DbProxy::handleTopicAppLocateMsg(TopicLocateMessageApp * pLocateMsg_)
 			tm_locateTime.tm_year + 1900, tm_locateTime.tm_mon + 1, tm_locateTime.tm_mday,
 			tm_locateTime.tm_hour, tm_locateTime.tm_min, tm_locateTime.tm_sec);
 		char szLocateSql[256] = { 0 };
-		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, "
-			"IsOut, RecordTime, Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, "
-			"%.06f, %d);", szLocateDbName, escort_db::E_LOCATE_APP, pLocateMsg_->szDeviceId,
-			szTaskId, nFleeFlag, szSqlDatetime, pLocateMsg_->dLat, pLocateMsg_->dLng, usBattery);
+		snprintf(szLocateSql, sizeof(szLocateSql), "insert into %s (LocationType, DeviceID, TaskID, IsOut, RecordTime, "
+			"Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, %.06f, %d);", szLocateDbName, 
+			escort_db::E_LOCATE_APP, pLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pLocateMsg_->dLat, 
+			pLocateMsg_->dLng, usBattery);
 		char szLocateDbName2[32] = { 0 };
-		snprintf(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d",
-			tm_locateTime.tm_mday);
+		snprintf(szLocateDbName2, sizeof(szLocateDbName2), "escort_locate.location_%02d", tm_locateTime.tm_mday);
 		char szLocateSql2[256] = { 0 };
-		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID,"
-			" IsOut, RecordTime, Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, "
-			"%.06f, %d);", szLocateDbName2, escort_db::E_LOCATE_APP, pLocateMsg_->szDeviceId,
-			szTaskId, nFleeFlag, szSqlDatetime, pLocateMsg_->dLat, pLocateMsg_->dLng, usBattery);
+		snprintf(szLocateSql2, sizeof(szLocateSql2), "insert into %s (LocationType, DeviceID, TaskID, IsOut, RecordTime, "
+			"Latitude, Longitude, Power) values (%d, '%s', '%s', %d, '%s', %.06f, %.06f, %d);", szLocateDbName2, 
+			escort_db::E_LOCATE_APP, pLocateMsg_->szDeviceId, szTaskId, nFleeFlag, szSqlDatetime, pLocateMsg_->dLat, 
+			pLocateMsg_->dLng, usBattery);
 		size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
 		unsigned long long ulTime = (unsigned long long)time(NULL);
 		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
@@ -4853,7 +4842,7 @@ int DbProxy::handleTopicAppLocateMsg(TopicLocateMessageApp * pLocateMsg_)
 		//if (bLastest) {
 		//	char szSqlNow[20] = { 0 };
 		//	format_sqldatetime(ulTime, szSqlNow, sizeof(szSqlNow));
-		//	char szDevSql[256] = { 0 };
+		//	char szDevSql[512] = { 0 };
 		//	snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastLocation='%s', Latitude="
 		//		"%.06f, Longitude=%.06f, LocationType=%d, Power=%u, Speed=0.0000, Coruse=0, LastOptTime='%s'"
 		//		" where DeviceID='%s';", szSqlDatetime, pBtLocateMsg_->dLat, pBtLocateMsg_->dLng, 
@@ -4950,15 +4939,13 @@ int DbProxy::handleTopicLowpoweAlarmMsg(TopicAlarmMessageLowpower * pLowpoweAlar
 		char szWarnSql[256] = { 0 };
 		unsigned int uiCount = 0;
 		if (bLastest) {	
-			snprintf(szDevSql, sizeof(szDevSql), "update device_info set Power=%u, LastCommuncation='%s',"
-				" LastOptTime='%s' where DeviceID='%s';", pLowpoweAlarmMsg_->usBattery, szSqlDatetime,
-				szSqlNow,	pLowpoweAlarmMsg_->szDeviceId);
+			snprintf(szDevSql, sizeof(szDevSql), "update device_info set Power=%u, LastCommuncation='%s', LastOptTime='%s' "
+				"where DeviceID='%s';", pLowpoweAlarmMsg_->usBattery, szSqlDatetime, szSqlNow, pLowpoweAlarmMsg_->szDeviceId);
 			uiCount += 1;
 		}
 		if (bWork && strlen(szTaskId)) {
-			snprintf(szWarnSql, sizeof(szWarnSql), "insert into alarm_info (TaskID, AlarmType, ActionType"
-				", RecordTime) values ('%s', %d, %d, '%s');", szTaskId, escort_db::E_ALMTYPE_LOWPOWER,
-				pLowpoweAlarmMsg_->usMode, szSqlDatetime);
+			snprintf(szWarnSql, sizeof(szWarnSql), "insert into alarm_info (TaskID, AlarmType, ActionType, RecordTime) values"
+				" ('%s', %d, %d, '%s');", szTaskId, escort_db::E_ALMTYPE_LOWPOWER, pLowpoweAlarmMsg_->usMode, szSqlDatetime);
 			uiCount += 1;
 		}
 		if (uiCount) {
@@ -5070,15 +5057,14 @@ int DbProxy::handleTopicLooseAlarmMsg(TopicAlarmMessageLoose * pLooseAlarmMsg_)
 		char szWarnSql[256] = { 0 };
 		unsigned int uiCount = 0;
 		if (bLastest) {
-			snprintf(szDevSql, sizeof(szDevSql), "update device_info set Power=%u, LastCommuncation='%s', "
-				"IsRemove=%u, LastOptTime='%s' where DeviceID='%s';", pLooseAlarmMsg_->usBattery, szSqlDatetime,
+			snprintf(szDevSql, sizeof(szDevSql), "update device_info set Power=%u, LastCommuncation='%s', IsRemove=%u, "
+				"LastOptTime='%s' where DeviceID='%s';", pLooseAlarmMsg_->usBattery, szSqlDatetime,
 				(pLooseAlarmMsg_->usMode == 0) ? 1 : 0, szSqlNow, pLooseAlarmMsg_->szDeviceId);
 			uiCount += 1;
 		}
 		if (bWork && strlen(szTaskId)) {
-			snprintf(szWarnSql, sizeof(szWarnSql), "insert into alarm_info (TaskID, AlarmType, ActionType, "
-				"RecordTime) values ('%s', %u, %u, '%s');", szTaskId, escort_db::E_ALMTYPE_LOOSE,
-				pLooseAlarmMsg_->usMode, szSqlNow);
+			snprintf(szWarnSql, sizeof(szWarnSql), "insert into alarm_info (TaskID, AlarmType, ActionType, RecordTime) "
+				"values ('%s', %u, %u, '%s');", szTaskId, escort_db::E_ALMTYPE_LOOSE, pLooseAlarmMsg_->usMode, szSqlNow);
 			uiCount += 1;
 		}
 		if (uiCount) {
