@@ -2,9 +2,22 @@
 #include <string.h>
 #include <Windows.h>
 #include "EscortDbProxy.h"
+#include "WatchDog.h"
+
+bool authorize()
+{
+	if (VerifyKeyFile() == 0) {
+		return true;
+	}
+	return false;
+}
 
 int main(int argc, char ** argv)
 {
+	if (!authorize()) {
+		printf("authorize failed\n");
+		return 0;
+	}
 	char szCfgFile[256] = { 0 };
 	unsigned long long ullInst = 0;
 	if (argc == 3 && (strcmp(argv[1], "-l") == 0)) {	

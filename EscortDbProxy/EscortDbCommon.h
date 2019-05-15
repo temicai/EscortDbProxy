@@ -125,7 +125,8 @@ namespace escort_db
 		char szGuarderId[20];
 		char szDeviceId[16];
 		char szHandset[64];
-		SqlPerson person;
+		char szTarget[64];
+		char szPhone[32];
 		int nFleeFlag;
 		tagSqlTask()
 		{
@@ -135,6 +136,8 @@ namespace escort_db
 			szGuarderId[0] = '\0';
 			szDeviceId[0] = '\0';
 			szHandset[0] = '\0';
+			szTarget[0] = '\0';
+			szPhone[0] = '\0';
 			nFleeFlag = 0;
 		}
 	} SqlTask;

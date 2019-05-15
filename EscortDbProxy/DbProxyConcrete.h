@@ -23,7 +23,7 @@
 #pragma comment(lib, "pthreadVC2.lib")
 #pragma comment(lib, "pf_log.lib")
 #pragma comment(lib, "libzmq.lib")
-#pragma comment(lib, "czmq.lib")
+#pragma comment(lib, "libczmq.lib")
 #pragma comment(lib, "zookeeper.lib")
 
 
@@ -142,6 +142,8 @@ private:
 	zsock_t * m_subscriber; 
 	zsock_t * m_interactor; 
 	zsock_t * m_pipeline;  //collect
+	pthread_mutex_t m_mutex4Pipeline;
+	pthread_mutex_t m_mutex4Interactor;
 
 	pthread_t m_pthdNetwork;
 	char m_szPipelineIdentity[40];
@@ -243,7 +245,6 @@ protected:
 	void handleSqlLocate(dbproxy::SqlStatement *, unsigned int, unsigned long long);
 	void replyQuery(void *, unsigned int, unsigned int, unsigned int, unsigned long long, const char *);
 
-	void dealNetwork();
 	bool addTopicMsg(TopicMessage * pMsg);
 	void dealTopicMsg();
 	void storeTopicMsg(TopicMessage * pMsg, unsigned long long);
@@ -288,7 +289,12 @@ protected:
 	bool addUpdateTask(dbproxy::UpdatePipeTask * pUpdateTask);
 	int getPipeState();
 	void setPipeState(int);
-	
+	void sendMessageByPipeline(const char * szMsg, unsigned short usMsgType);
+	unsigned short getRandKey();
+	void encryptMessage(unsigned char * pData, unsigned int begin, unsigned int end, unsigned short key);
+	void decryptMessage(unsigned char * pData, unsigned int begin, unsigned int end, unsigned short key);
+	void closeTaskFromSql(const char * pTaskId, const char * pPersonId, const char * pEndTime);
+
 	friend int supervise(zloop_t *, int, void *);
 	friend int readSubscriber(zloop_t *, zsock_t * reader_, void *);
 	friend int readPipeline(zloop_t *, zsock_t * reader_, void *);
@@ -299,7 +305,6 @@ protected:
 	friend void * dealSqlQueryThread(void *);
 	friend void * dealSqlExecThread(void *);
 	friend void * dealSqlLocateThread(void *);
-	friend void * dealNetworkThread(void *);
 	friend void * dealTopicMsgThread(void *);
 	friend void * dealInteractMsgThread(void *);
 	friend void * superviseThread(void *);
