@@ -1,6 +1,6 @@
 #include "DbProxyConcrete.h"
 
-zhash_t * DbProxy::g_deviceList = NULL;
+std::map<std::string, escort::WristletDevice *> DbProxy::g_deviceList;
 zhash_t * DbProxy::g_guarderList = NULL;
 zhash_t * DbProxy::g_taskList = NULL;
 zhash_t * DbProxy::g_personList = NULL;
@@ -167,7 +167,7 @@ DbProxy::DbProxy(const char * pZkHost_, const char * pRoot_)
 
 	if (g_nRefCount == 0) {
 		g_bLoadSql = FALSE;
-		g_deviceList = zhash_new();
+		g_deviceList.clear();
 		g_guarderList = zhash_new();
 		g_taskList = zhash_new();
 		g_personList = zhash_new();
@@ -197,7 +197,7 @@ DbProxy::DbProxy(const char * pZkHost_, const char * pRoot_)
 	if (pZkHost_ && strlen(pZkHost_)) {
 		strncpy_s(m_szZkHost, sizeof(m_szZkHost), pZkHost_, strlen(pZkHost_));	
 	}
-	initZookeeper();
+	//initZookeeper();
 
 	if (pRoot_ && strlen(pRoot_)) {
 		strncpy_s(m_szLogRoot, sizeof(m_szLogRoot), pRoot_, strlen(pRoot_));
@@ -214,9 +214,20 @@ DbProxy::~DbProxy()
 	g_nRefCount--;
 	if (g_nRefCount <= 0) {
 		g_bLoadSql = FALSE;
-		if (g_deviceList) {
-			zhash_destroy(&g_deviceList);
+		pthread_mutex_lock(&g_mutex4DevList);
+		if (!g_deviceList.empty()) {
+			DeviceList::iterator iter = g_deviceList.begin();
+			while (iter != g_deviceList.end()) {
+				auto pDevice = iter->second;
+				if (pDevice) {
+					free(pDevice);
+					pDevice = NULL;
+				}
+				iter = g_deviceList.erase(iter);
+			}
 		}
+		pthread_mutex_unlock(&g_mutex4DevList);
+
 		if (g_guarderList) {
 			zhash_destroy(&g_guarderList);
 		}
@@ -405,7 +416,7 @@ int DbProxy::Start(const char * pHost_, unsigned short usReceptPort_, const char
 			}
 			m_zkDbProxy.usMasterDbPort = usMasterDbPort_;
 			m_zkDbProxy.usSlaveDbPort = usSlaveDbPort_;
-			competeForMaster();
+			//competeForMaster();
 			if (g_bLoadSql == FALSE) {
 				if (initSqlBuffer()) {
 					unsigned long long ulTime = (unsigned long long)time(NULL);
@@ -414,7 +425,7 @@ int DbProxy::Start(const char * pHost_, unsigned short usReceptPort_, const char
 				}
 			}
 			char szLog[256] = { 0 };
-			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]Database proxy start %u\r\n", __FUNCTION__, __LINE__, usReceptPort_);
+			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]Database proxy start %u\n", __FUNCTION__, __LINE__, usReceptPort_);
 			LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 			return 0;
 		}
@@ -457,7 +468,7 @@ int DbProxy::Stop()
 	}
 	m_nRun = 0;
 	char szLog[256] = { 0 };
-	sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]Database proxy stop\r\n", __FUNCTION__, __LINE__);
+	sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]Database proxy stop\n", __FUNCTION__, __LINE__);
 	LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 	if (m_pthdSupervise.p) {
 		pthread_join(m_pthdSupervise, NULL);
@@ -562,7 +573,7 @@ void DbProxy::initLog()
 		m_ullLogInst = LOG_Init();
 		if (m_ullLogInst) {
 			pf_logger::LogConfig logConf;
-			logConf.usLogType = m_usLogType;
+			logConf.usLogType = pf_logger::eLOGTYPE_FILE;
 			logConf.usLogPriority = pf_logger::eLOGPRIO_ALL;
 			char szLogDir[256] = { 0 };
 			snprintf(szLogDir, 256, "%slog\\", m_szLogRoot);
@@ -718,10 +729,9 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 	char szLog[1024] = { 0 };
 	pthread_mutex_lock(&m_mutex4ReadConn);
 	if (m_readConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->uiStatementLen) {
-		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%llu, execute query sql: %s\r\n",
+		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%llu, execute query sql: %s\n",
 			__FUNCTION__, __LINE__, uiQrySeq_, ulQryTime_, pSqlStatement_->pStatement);
 		//LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-		printf(szLog);
 		int nErr = mysql_real_query(m_readConn, pSqlStatement_->pStatement, pSqlStatement_->uiStatementLen);
 		if (nErr == 0) {
 			MYSQL_RES * res_ptr = mysql_store_result(m_readConn);
@@ -833,23 +843,29 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							pDev->nDeviceInCharge = pSqlDevList[i].nCharge;
 							memcpy_s(&pDevList[i], nDeviceSize, pDev, nDeviceSize);
 							pthread_mutex_lock(&g_mutex4DevList);
-							zhash_update(g_deviceList, pSqlDevList[i].szDeviceId, pDev);
-							zhash_freefn(g_deviceList, pSqlDevList[i].szDeviceId, free);
-							pthread_mutex_unlock(&g_mutex4DevList);
-							sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]load DeviceId=%s, factoryId=%s, orgId=%s, status=%hu,"
-								" battery=%hu, looseState=%hu, online=%hu, imei=%s, mnc=%d, charge=%d\n", __FUNCTION__, __LINE__, 
-								pDev->deviceBasic.szDeviceId, pDev->deviceBasic.szFactoryId, pDev->deviceBasic.szOrgId, 
-								pDev->deviceBasic.nStatus, pDev->deviceBasic.nBattery, pDev->deviceBasic.nLooseStatus,
-								pDev->deviceBasic.nOnline, pDev->deviceBasic.szDeviceImei, pDev->deviceBasic.nDeviceMnc, 
-								pDev->nDeviceInCharge);
-							LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+							DeviceList::iterator iter = g_deviceList.find(pSqlDevList[i].szDeviceId);
+							if (iter != g_deviceList.end()) {
+																
+							}
+							else {
+								g_deviceList.emplace(pSqlDevList[i].szDeviceId, pDev);
+								sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]load DeviceId=%s, factoryId=%s, "
+									"orgId=%s, status=%hu, battery=%hu, looseState=%hu, online=%hu, imei=%s, mnc=%d, "
+									"charge=%d\n", __FUNCTION__, __LINE__,
+									pDev->deviceBasic.szDeviceId, pDev->deviceBasic.szFactoryId, pDev->deviceBasic.szOrgId,
+									pDev->deviceBasic.nStatus, pDev->deviceBasic.nBattery, pDev->deviceBasic.nLooseStatus,
+									pDev->deviceBasic.nOnline, pDev->deviceBasic.szDeviceImei, pDev->deviceBasic.nDeviceMnc,
+									pDev->nDeviceInCharge);
+								LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+							}							
+							pthread_mutex_unlock(&g_mutex4DevList);				
 							i++;
 						}
 						if (pQryFrom_ && strlen(pQryFrom_)) {
 							replyQuery(pDevList, (unsigned int)nCount, pSqlStatement_->uiCorrelativeTable, uiQrySeq_, 
 								ulQryTime_, pQryFrom_);
 						}
-						sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]query row=%u, seq=%u, time=%llu, from=%s, sql=%s\r\n", 
+						sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]query row=%u, seq=%u, time=%llu, from=%s, sql=%s\n", 
 							__FUNCTION__, __LINE__, (unsigned int)nCount, uiQrySeq_, ulQryTime_, pQryFrom_ ? pQryFrom_ : " ", 
 							pSqlStatement_->pStatement);
 						LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
@@ -924,7 +940,7 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							replyQuery(pGuarderList, (unsigned int)nCount, pSqlStatement_->uiCorrelativeTable, uiQrySeq_, 
 								ulQryTime_, pQryFrom_);
 						}
-						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]query row=%u, seq=%u, time=%llu, from=%s, sql=%s\r\n", 
+						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]query row=%u, seq=%u, time=%llu, from=%s, sql=%s\n", 
 							__FUNCTION__, __LINE__, (unsigned int)nCount, uiQrySeq_, ulQryTime_, pQryFrom_ ? pQryFrom_ : " ", 
 							pSqlStatement_->pStatement);
 						LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
@@ -944,10 +960,9 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 						EscortTask * pTaskList = (EscortTask *)zmalloc(nCount * nTaskSize);
 						int i = 0;
 						while (row = mysql_fetch_row(res_ptr)) {
-							strncpy_s(pSqlTaskList[i].szTaskId, sizeof(pSqlTaskList[i].szTaskId), row[0], 
-								strlen(row[0]));
-							pSqlTaskList[i].usTaskType = (unsigned short)atoi(row[1]);
-							pSqlTaskList[i].usTaskLimit = (unsigned short)atoi(row[2]);
+							strcpy_s(pSqlTaskList[i].szTaskId, sizeof(pSqlTaskList[i].szTaskId), row[0]);
+							pSqlTaskList[i].usTaskType = (unsigned short)strtol(row[1], NULL, 0);
+							pSqlTaskList[i].usTaskLimit = (unsigned short)strtol(row[2], NULL, 0);
 							if (row[3] && strlen(row[3])) {
 								strcpy_s(pSqlTaskList[i].szStartTime, sizeof(pSqlTaskList[i].szStartTime), row[3]);
 							}
@@ -974,16 +989,12 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							}
 							EscortTask * pTask = (EscortTask *)zmalloc(nTaskSize);
 							memset(pTask, 0, sizeof(EscortTask));
-							strncpy_s(pTask->szTaskId, sizeof(pTask->szTaskId), pSqlTaskList[i].szTaskId,
-								strlen(pSqlTaskList[i].szTaskId));
-							strncpy_s(pTask->szDeviceId, sizeof(pTask->szDeviceId), pSqlTaskList[i].szDeviceId,
-								strlen(pSqlTaskList[i].szDeviceId));
-							strncpy_s(pTask->szGuarder, sizeof(pTask->szGuarder), pSqlTaskList[i].szGuarderId,
-								strlen(pSqlTaskList[i].szGuarderId));
+							strcpy_s(pTask->szTaskId, sizeof(pTask->szTaskId), pSqlTaskList[i].szTaskId);
+							strcpy_s(pTask->szDeviceId, sizeof(pTask->szDeviceId), pSqlTaskList[i].szDeviceId);
+							strcpy_s(pTask->szGuarder, sizeof(pTask->szGuarder), pSqlTaskList[i].szGuarderId);
 							unsigned long long ulTaskStartTime = sqldatetime2time(pSqlTaskList[i].szStartTime);
 							format_datetime(ulTaskStartTime, pTask->szTaskStartTime, sizeof(pTask->szTaskStartTime));
-							strncpy_s(pTask->szDestination, sizeof(pTask->szDestination), pSqlTaskList[i].szDestination,
-								strlen(pSqlTaskList[i].szDestination));
+							strcpy_s(pTask->szDestination, sizeof(pTask->szDestination), pSqlTaskList[i].szDestination);
 							pTask->nTaskType = (uint8_t)pSqlTaskList[i].usTaskType;
 							pTask->nTaskLimitDistance = (uint8_t)pSqlTaskList[i].usTaskLimit;
 							strcpy_s(pTask->szTarget, sizeof(pTask->szTarget), pSqlTaskList[i].szTarget);
@@ -993,18 +1004,21 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							}
 							strcpy_s(pTask->szPhone, sizeof(pTask->szPhone), pSqlTaskList[i].szPhone);
 							pthread_mutex_lock(&g_mutex4DevList);
-							WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pSqlTaskList[i].szDeviceId);
-							if (pDev) {
-								strcpy_s(pTask->szFactoryId, sizeof(pTask->szFactoryId), pDev->deviceBasic.szFactoryId);
-								if (pSqlTaskList[i].nFleeFlag) {
-									changeDeviceStatus(DEV_FLEE, pDev->deviceBasic.nStatus);
+							DeviceList::iterator iter = g_deviceList.find(pSqlTaskList[i].szDeviceId);
+							if (iter != g_deviceList.end()) {
+								WristletDevice * pDev = iter->second;
+								if (pDev) {
+									strcpy_s(pTask->szFactoryId, sizeof(pTask->szFactoryId), pDev->deviceBasic.szFactoryId);
+									if (pSqlTaskList[i].nFleeFlag) {
+										changeDeviceStatus(DEV_FLEE, pDev->deviceBasic.nStatus);
+									}
+									else {
+										changeDeviceStatus(DEV_GUARD, pDev->deviceBasic.nStatus);
+									}
+									strcpy_s(pDev->szBindGuard, sizeof(pDev->szBindGuard), pSqlTaskList[i].szGuarderId);
+									pDev->ulBindTime = ulTaskStartTime;
+									strcpy_s(pTask->szOrg, sizeof(pTask->szOrg), pDev->deviceBasic.szOrgId);
 								}
-								else {
-									changeDeviceStatus(DEV_GUARD, pDev->deviceBasic.nStatus);
-								}
-								strcpy_s(pDev->szBindGuard, sizeof(pDev->szBindGuard), pSqlTaskList[i].szGuarderId);
-								pDev->ulBindTime = ulTaskStartTime;
-								strcpy_s(pTask->szOrg, sizeof(pTask->szOrg), pDev->deviceBasic.szOrgId);
 							}
 							pthread_mutex_unlock(&g_mutex4DevList);
 							pthread_mutex_lock(&g_mutex4GuarderList);
@@ -1026,8 +1040,8 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							zhash_freefn(g_taskList, pTask->szTaskId, free);
 							pthread_mutex_unlock(&g_mutex4TaskList);
 
-							sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]load taskId=%s, deviceId=%s, factoryId=%s, orgId=%s, "
-								"startTime=%s, handset=%s, phone=%s, flee=%d\n", __FUNCTION__, __LINE__, pTask->szTaskId, 
+							sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]load taskId=%s, factoryId=%s, deviceId=%s, orgId=%s,"
+								" startTime=%s, handset=%s, phone=%s, flee=%d\n", __FUNCTION__, __LINE__, pTask->szTaskId, 
 								pTask->szFactoryId, pTask->szDeviceId, pTask->szOrg, pTask->szTaskStartTime, pTask->szHandset, 
 								pTask->szPhone, (int)pTask->nTaskFlee);
 							LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
@@ -1256,10 +1270,13 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							pthread_mutex_unlock(&g_mutex4FenceTaskList);
 
 							pthread_mutex_lock(&g_mutex4DevList);
-							if (zhash_size(g_deviceList)) {
-								WristletDevice * pDevice = (WristletDevice *)zhash_lookup(g_deviceList, pFenceTask->szDeviceId);
-								if (pDevice) {
-									pDevice->nDeviceHasFence = 1;
+							if (!g_deviceList.empty()) {
+								DeviceList::iterator iter = g_deviceList.find(pFenceTask->szDeviceId);
+								if (iter != g_deviceList.end()) {
+									WristletDevice * pDevice = iter->second;
+									if (pDevice) {
+										pDevice->nDeviceHasFence = 1;
+									}
 								}
 							}
 							pthread_mutex_unlock(&g_mutex4DevList);
@@ -1336,7 +1353,7 @@ void DbProxy::handleSqlExec(dbproxy::SqlStatement * pSqlStatement_, unsigned int
 	char szLog[1024] = { 0 };
 	pthread_mutex_lock(&m_mutex4WriteConn);
 	if (m_writeConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->uiStatementLen) {
-		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%llu, execute sql=%s\r\n",
+		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%llu, execute sql=%s\n",
 			__FUNCTION__, __LINE__, uiExecSeq_, ulExecTime_, pSqlStatement_->pStatement);
 		//LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 		printf(szLog);
@@ -1344,14 +1361,14 @@ void DbProxy::handleSqlExec(dbproxy::SqlStatement * pSqlStatement_, unsigned int
 		if (nErr == 0) {
 			my_ulonglong nAffectedRow = mysql_affected_rows(m_writeConn);
 			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute sql affected=%d, seq=%u, time=%llu, from=%s,"
-				"sql=%s\r\n", __FUNCTION__, __LINE__, (int)nAffectedRow, uiExecSeq_, ulExecTime_,
+				"sql=%s\n", __FUNCTION__, __LINE__, (int)nAffectedRow, uiExecSeq_, ulExecTime_,
 				pExecFrom_ ? pExecFrom_ : "", pSqlStatement_->pStatement);
 			LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 		}
 		else {
 			//need backup
 			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute sql error=%d, %s, seq=%u, time=%llu, from=%s, "
-				"sql=%s\r\n", __FUNCTION__, __LINE__, mysql_errno(m_writeConn), mysql_error(m_writeConn), uiExecSeq_, 
+				"sql=%s\n", __FUNCTION__, __LINE__, mysql_errno(m_writeConn), mysql_error(m_writeConn), uiExecSeq_, 
 				ulExecTime_, pExecFrom_ ? pExecFrom_ : "", pSqlStatement_->pStatement);
 			LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 			if (nErr == 2006 || nErr == 2013) {
@@ -1372,7 +1389,7 @@ void DbProxy::handleSqlExec(dbproxy::SqlStatement * pSqlStatement_, unsigned int
 				if (nErr2 == 0) {
 					my_ulonglong nAffectedRow = mysql_affected_rows(m_writeConn);
 					snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]retry=%d, execute sql affected=%d, seq=%u, time=%llu, "
-						"from=%s, sql=%s\r\n", __FUNCTION__, __LINE__, nRetryTime, (int)nAffectedRow, uiExecSeq_, ulExecTime_,
+						"from=%s, sql=%s\n", __FUNCTION__, __LINE__, nRetryTime, (int)nAffectedRow, uiExecSeq_, ulExecTime_,
 						pExecFrom_ ? pExecFrom_ : "", pSqlStatement_->pStatement);
 					LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 					mysql_set_character_set(m_writeConn, "gb2312");
@@ -1817,15 +1834,15 @@ void DbProxy::dealTopicMsg()
 							storeTopicMsg(pMsg, offlineMsg.ulMessageTime);
 						}
 						else {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]MSG_DEVICE_OFFLINE data miss, uuid=%s, seq=%u, factoryId=%s,"
-								" deviceId=%s, datetime=%s\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, pMsg->uiMsgSequence, 
-								offlineMsg.szFactoryId, offlineMsg.szDeviceId, szDatetime);
+							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]MSG_DEVICE_OFFLINE data miss, uuid=%s, seq=%u, "
+								"factoryId=%s, deviceId=%s, datetime=%s\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, 
+								pMsg->uiMsgSequence, offlineMsg.szFactoryId, offlineMsg.szDeviceId, szDatetime);
 							LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 						}
 					}
 					else {
-						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]parse MSG_DEVICE_OFFLINE msg data, uuid=%s, seq=%u, "
-							"parse JSON data error\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, pMsg->uiMsgSequence);
+						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]parse MSG_DEVICE_OFFLINE msg data, uuid=%s, seq=%u,"
+							" parse JSON data error\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, pMsg->uiMsgSequence);
 						LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 					}
 					break;
@@ -2751,259 +2768,260 @@ void DbProxy::dealTopicMsg()
 							storeTopicMsg(pMsg, bindMsg.ulMessageTime);
 						}
 						else {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]MSG_DEVICE_BIND data miss, uuid=%s, seq=%u, factoryId=%s, "
-								"deviceId=%s, orgId=%s, guarder=%s, mode=%d, datetime=%s\r\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, 
-								pMsg->uiMsgSequence, bindMsg.szFactoryId, bindMsg.szDeviceId, bindMsg.szOrg, bindMsg.szGuarder, 
-								bindMsg.usMode, szDatetime);
+							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]MSG_DEVICE_BIND data miss, uuid=%s, seq=%u, "
+								"factoryId=%s,deviceId=%s, orgId=%s, guarder=%s, mode=%d, datetime=%s\n", 
+								__FUNCTION__, __LINE__, pMsg->szMsgUuid, pMsg->uiMsgSequence, bindMsg.szFactoryId, 
+								bindMsg.szDeviceId, bindMsg.szOrg, bindMsg.szGuarder, bindMsg.usMode, szDatetime);
 							LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 						}
 					}
 					else {
 						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]parse MSG_DEVICE_BIND msg data, uuid=%s, seq=%u, "
-							"parse JSON data error\r\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, pMsg->uiMsgSequence);
+							"parse JSON data error\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, pMsg->uiMsgSequence);
 						LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 					}
 					break;
 				}
 				case PUBMSG_TASK: {
-					rapidjson::Document doc;
-					if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
-						int nSubType = -1;
-						if (doc.HasMember("subType")) {
-							if (doc["subType"].IsInt()) {
-								nSubType = doc["subType"].GetInt();
+					if (strcmp(pMsg->szMsgFrom, m_szPipelineIdentity) != 0) {
+						rapidjson::Document doc;
+						if (!doc.Parse(pMsg->szMsgBody).HasParseError()) {
+							int nSubType = -1;
+							if (doc.HasMember("subType")) {
+								if (doc["subType"].IsInt()) {
+									nSubType = doc["subType"].GetInt();
+								}
 							}
-						}
-						if (nSubType == TASK_OPT_SUBMIT) {
-							TopicTaskMessage taskMsg;
-							bool bValidTask = false;
-							bool bValidFactory = false;
-							bool bValidDevice = false;
-							bool bValidOrg = false;
-							bool bValidGuarder = false;
-							bool bValidType = false;
-							bool bValidLimit = false;
-							bool bValidDatetime = false;
-							char szDatetime[20] = { 0 };
-							if (doc.HasMember("taskId")) {
-								if (doc["taskId"].IsString()) {
-									size_t nSize = doc["taskId"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskMsg.szTaskId, sizeof(taskMsg.szTaskId), doc["taskId"].GetString(), nSize);
-										bValidTask = true;
+							if (nSubType == TASK_OPT_SUBMIT) {
+								TopicTaskMessage taskMsg;
+								bool bValidTask = false;
+								bool bValidFactory = false;
+								bool bValidDevice = false;
+								bool bValidOrg = false;
+								bool bValidGuarder = false;
+								bool bValidType = false;
+								bool bValidLimit = false;
+								bool bValidDatetime = false;
+								char szDatetime[20] = { 0 };
+								if (doc.HasMember("taskId")) {
+									if (doc["taskId"].IsString()) {
+										size_t nSize = doc["taskId"].GetStringLength();
+										if (nSize) {
+											strcpy_s(taskMsg.szTaskId, sizeof(taskMsg.szTaskId), doc["taskId"].GetString());
+											bValidTask = true;
+										}
 									}
 								}
-							}
-							if (doc.HasMember("factoryId")) {
-								if (doc["factoryId"].IsString()) {
-									size_t nSize = doc["factoryId"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskMsg.szFactoryId, sizeof(taskMsg.szFactoryId),
-											doc["factoryId"].GetString(), nSize);
-										bValidFactory = true;
+								if (doc.HasMember("factoryId")) {
+									if (doc["factoryId"].IsString()) {
+										size_t nSize = doc["factoryId"].GetStringLength();
+										if (nSize) {
+											strcpy_s(taskMsg.szFactoryId, sizeof(taskMsg.szFactoryId), doc["factoryId"].GetString());
+											bValidFactory = true;
+										}
 									}
 								}
-							}
-							if (doc.HasMember("deviceId")) {
-								if (doc["deviceId"].IsString()) {
-									size_t nSize = doc["deviceId"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskMsg.szDeviceId, sizeof(taskMsg.szDeviceId),
-											doc["deviceId"].GetString(), nSize);
-										bValidDevice = true;
+								if (doc.HasMember("deviceId")) {
+									if (doc["deviceId"].IsString()) {
+										size_t nSize = doc["deviceId"].GetStringLength();
+										if (nSize) {
+											strcpy_s(taskMsg.szDeviceId, sizeof(taskMsg.szDeviceId), doc["deviceId"].GetString());
+											bValidDevice = true;
+										}
 									}
 								}
-							}
-							if (doc.HasMember("orgId")) {
-								if (doc["orgId"].IsString()) {
-									size_t nSize = doc["orgId"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskMsg.szOrg, sizeof(taskMsg.szOrg), doc["orgId"].GetString(), nSize);
-										bValidOrg = true;
+								if (doc.HasMember("orgId")) {
+									if (doc["orgId"].IsString()) {
+										size_t nSize = doc["orgId"].GetStringLength();
+										if (nSize) {
+											strcpy_s(taskMsg.szOrg, sizeof(taskMsg.szOrg), doc["orgId"].GetString());
+											bValidOrg = true;
+										}
 									}
 								}
-							}
-							if (doc.HasMember("guarder")) {
-								if (doc["guarder"].IsString()) {
-									size_t nSize = doc["guarder"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskMsg.szGuarder, sizeof(taskMsg.szGuarder),
-											doc["guarder"].GetString(), nSize);
-										bValidGuarder = true;
+								if (doc.HasMember("guarder")) {
+									if (doc["guarder"].IsString()) {
+										size_t nSize = doc["guarder"].GetStringLength();
+										if (nSize) {
+											strcpy_s(taskMsg.szGuarder, sizeof(taskMsg.szGuarder), doc["guarder"].GetString());
+											bValidGuarder = true;
+										}
 									}
 								}
-							}
-							if (doc.HasMember("taskType")) {
-								if (doc["taskType"].IsInt()) {
-									taskMsg.usTaskType = (unsigned short)doc["taskType"].GetInt();
-									bValidType = true;
-								}
-							}
-							if (doc.HasMember("limit")) {
-								if (doc["limit"].IsInt()) {
-									taskMsg.usTaskLimit = (unsigned short)doc["limit"].GetInt();
-									bValidLimit = true;
-								}
-							}
-							if (doc.HasMember("destination")) {
-								if (doc["destination"].IsString()) {
-									size_t nSize = doc["destination"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskMsg.szDestination, sizeof(taskMsg.szDestination), 
-											doc["destination"].GetString(),
-											sizeof(taskMsg.szDestination) >= nSize ? nSize : sizeof(taskMsg.szDestination));
+								if (doc.HasMember("taskType")) {
+									if (doc["taskType"].IsInt()) {
+										taskMsg.usTaskType = (unsigned short)doc["taskType"].GetInt();
 									}
 								}
-							}
-							if (doc.HasMember("target")) {
-								if (doc["target"].IsString()) {
-									size_t nSize = doc["target"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskMsg.szTarget, sizeof(taskMsg.szTarget),
-											doc["target"].GetString(), 
-											sizeof(taskMsg.szTarget) >= nSize ? nSize : sizeof(taskMsg.szDestination));
+								if (doc.HasMember("limit")) {
+									if (doc["limit"].IsInt()) {
+										taskMsg.usTaskLimit = (unsigned short)doc["limit"].GetInt();
 									}
 								}
+								if (doc.HasMember("destination")) {
+									if (doc["destination"].IsString()) {
+										size_t nSize = doc["destination"].GetStringLength();
+										if (nSize) {
+											strncpy_s(taskMsg.szDestination, sizeof(taskMsg.szDestination),
+												doc["destination"].GetString(),
+												sizeof(taskMsg.szDestination) >= nSize ? nSize : sizeof(taskMsg.szDestination));
+										}
+									}
+								}
+								if (doc.HasMember("target")) {
+									if (doc["target"].IsString()) {
+										size_t nSize = doc["target"].GetStringLength();
+										if (nSize) {
+											strncpy_s(taskMsg.szTarget, sizeof(taskMsg.szTarget),
+												doc["target"].GetString(),
+												sizeof(taskMsg.szTarget) >= nSize ? nSize : sizeof(taskMsg.szDestination));
+										}
+									}
+								}
+								if (doc.HasMember("datetime")) {
+									if (doc["datetime"].IsString()) {
+										size_t nSize = doc["datetime"].GetStringLength();
+										if (nSize) {
+											strncpy_s(szDatetime, sizeof(szDatetime), doc["datetime"].GetString(), nSize);
+											taskMsg.ulMessageTime = strdatetime2time(szDatetime);
+											bValidDatetime = true;
+										}
+									}
+								}
+								if (doc.HasMember("handset")) {
+									if (doc["handset"].IsString() && doc["handset"].GetStringLength()) {
+										strcpy_s(taskMsg.szHandset, sizeof(taskMsg.szHandset), doc["handset"].GetString());
+									}
+								}
+								if (doc.HasMember("phone")) {
+									if (doc["phone"].IsString() && doc["phone"].GetStringLength()) {
+										strcpy_s(taskMsg.szPhone, sizeof(taskMsg.szPhone), doc["phone"].GetString());
+									}
+								}
+								if (bValidTask && bValidFactory && bValidDevice && bValidOrg && bValidGuarder && bValidDatetime) {
+									if (strcmp(pMsg->szMsgFrom, "webserver") != 0) { //ignore action from webserver
+										handleTopicTaskSubmitMsg(&taskMsg);
+									}
+									storeTopicMsg(pMsg, taskMsg.ulMessageTime);
+								}
+								else {
+									snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]submit task data miss, uuid=%s, seq=%u"
+										", taskId=%s, factoryId=%s, deviceId=%s, orgId=%s, guarder=%s, type=%u, limit=%u, "
+										"destination=%s, targer=%s, datetime=%s\r\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid,
+										pMsg->uiMsgSequence, bValidTask ? taskMsg.szTaskId : "null",
+										bValidFactory ? taskMsg.szFactoryId : "null", bValidDevice ? taskMsg.szDeviceId : "null",
+										bValidOrg ? taskMsg.szOrg : "null", bValidGuarder ? taskMsg.szGuarder : "null",
+										taskMsg.usTaskType, taskMsg.usTaskLimit, taskMsg.szDestination, taskMsg.szTarget,
+										bValidDatetime ? szDatetime : "null");
+									LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
+								}
 							}
-							if (doc.HasMember("datetime")) {
-								if (doc["datetime"].IsString()) {
-									size_t nSize = doc["datetime"].GetStringLength();
-									if (nSize) {
-										strncpy_s(szDatetime, sizeof(szDatetime), doc["datetime"].GetString(), nSize);
-										taskMsg.ulMessageTime = strdatetime2time(szDatetime);
+							else if (nSubType == TASK_OPT_CLOSE) {
+								int nState = -1;
+								TopicTaskCloseMessage taskCloseMsg;
+								bool bValidTask = false;
+								bool bValidDatetime = false;
+								char szDatetime[20] = { 0 };
+								if (doc.HasMember("state")) {
+									if (doc["state"].IsInt()) {
+										nState = doc["state"].GetInt();
+										taskCloseMsg.nClose = nState;
+									}
+								}
+								if (doc.HasMember("taskId")) {
+									if (doc["taskId"].IsString()) {
+										size_t nSize = doc["taskId"].GetStringLength();
+										if (nSize) {
+											strcpy_s(taskCloseMsg.szTaskId, sizeof(taskCloseMsg.szTaskId), doc["taskId"].GetString());
+											bValidTask = true;
+										}
+									}
+								}
+								if (doc.HasMember("datetime")) {
+									if (doc["datetime"].IsString()) {
+										size_t nSize = doc["datetime"].GetStringLength();
+										if (nSize) {
+											strcpy_s(szDatetime, sizeof(szDatetime), doc["datetime"].GetString());
+											taskCloseMsg.ulMessageTime = strdatetime2time(szDatetime);
+											bValidDatetime = true;
+										}
+									}
+								}
+								if (bValidTask && bValidDatetime) {
+									if (strcmp(pMsg->szMsgFrom, "webserver") != 0) { //ignore web action
+										handleTopicTaskCloseMsg(&taskCloseMsg);
+									}
+									storeTopicMsg(pMsg, taskCloseMsg.ulMessageTime);
+								}
+								else {
+									snprintf(szLog, sizeof(szLog), "[DbProx]%s[%d]close task data miss, uuid=%s, seq=%u, "
+										"task=%s, close=%d, stopdatetime=%s\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid,
+										pMsg->uiMsgSequence, bValidTask ? taskCloseMsg.szTaskId : "null", nState,
+										bValidDatetime ? szDatetime : "null");
+									LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
+								}
+							}
+							else if (nSubType == TASK_OPT_MODIFY) {
+								TopicTaskModifyMessage taskModifyMsg;
+								bool bValidTask = false;
+								bool bValidDatetime = false;
+								char szDatetime[20] = { 0 };
+								if (doc.HasMember("taskId")) {
+									if (doc["taskId"].IsString()) {
+										size_t nSize = doc["taskId"].GetStringLength();
+										if (nSize) {
+											strncpy_s(taskModifyMsg.szTaskId, sizeof(taskModifyMsg.szTaskId),
+												doc["taskId"].GetString(), nSize);
+											bValidTask = true;
+										}
+									}
+								}
+								if (doc.HasMember("handset")) {
+									if (doc["handset"].IsString()) {
+										size_t nSize = doc["handset"].GetStringLength();
+										if (nSize) {
+											strncpy_s(taskModifyMsg.szHandset, sizeof(taskModifyMsg.szHandset),
+												doc["handset"].GetString(), nSize);
+										}
+									}
+								}
+								if (doc.HasMember("datetime")) {
+									if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
+										strcpy_s(szDatetime, sizeof(szDatetime), doc["datetime"].GetString());
+										taskModifyMsg.ulMessageTime = strdatetime2time(szDatetime);
 										bValidDatetime = true;
 									}
 								}
-							}
-							if (doc.HasMember("handset")) {
-								if (doc["handset"].IsString() && doc["handset"].GetStringLength()) {									
-									strcpy_s(taskMsg.szHandset, sizeof(taskMsg.szHandset), doc["handset"].GetString());									
+								if (doc.HasMember("phone")) {
+									if (doc["phone"].IsString() && doc["phone"].GetStringLength()) {
+										strcpy_s(taskModifyMsg.szPhone, sizeof(taskModifyMsg.szPhone), doc["phone"].GetString());
+									}
 								}
-							}
-							if (doc.HasMember("phone")) {
-								if (doc["phone"].IsString() && doc["phone"].GetStringLength()) {
-									strcpy_s(taskMsg.szPhone, sizeof(taskMsg.szPhone), doc["phone"].GetString());
+								if (bValidTask && bValidDatetime) {
+									if (strcmp(pMsg->szMsgFrom, "webserver") != 0) {
+										handleTopicTaskModifyMsg(&taskModifyMsg);
+									}
+									storeTopicMsg(pMsg, taskModifyMsg.ulMessageTime);
 								}
-							}
-							if (bValidTask && bValidFactory && bValidDevice && bValidOrg && bValidGuarder
-								&& bValidType && bValidLimit && bValidDatetime) {
-								handleTopicTaskSubmitMsg(&taskMsg);
-								storeTopicMsg(pMsg, taskMsg.ulMessageTime);
+								else {
+									snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]modify task data miss, uuid=%s, seq=%u, "
+										"task=%s, handset=%s, datetime=%s\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid,
+										pMsg->uiMsgSequence, bValidTask ? taskModifyMsg.szTaskId : "null", taskModifyMsg.szHandset,
+										bValidDatetime ? szDatetime : "null");
+									LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
+								}
 							}
 							else {
-								snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]submit task data miss, uuid=%s, seq=%u"
-									", taskId=%s, factoryId=%s, deviceId=%s, orgId=%s, guarder=%s, type=%u, limit=%u, "
-									"destination=%s, targer=%s, datetime=%s\r\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid,
-									pMsg->uiMsgSequence, bValidTask ? taskMsg.szTaskId : "null",
-									bValidFactory ? taskMsg.szFactoryId : "null", bValidDevice ? taskMsg.szDeviceId : "null",
-									bValidOrg ? taskMsg.szOrg : "null", bValidGuarder ? taskMsg.szGuarder : "null",
-									taskMsg.usTaskType, taskMsg.usTaskLimit, taskMsg.szDestination, taskMsg.szTarget,
-									bValidDatetime ? szDatetime : "null");
-								LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-							}
-						}
-						else if (nSubType == TASK_OPT_CLOSE) { 
-							int nState = -1;
-							TopicTaskCloseMessage taskCloseMsg;
-							bool bValidTask = false;
-							bool bValidDatetime = false;
-							char szDatetime[20] = { 0 };
-							if (doc.HasMember("state")) {
-								if (doc["state"].IsInt()) {
-									nState = doc["state"].GetInt();
-									taskCloseMsg.nClose = nState;
-								}
-							}
-							if (doc.HasMember("taskId")) {
-								if (doc["taskId"].IsString()) {
-									size_t nSize = doc["taskId"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskCloseMsg.szTaskId, sizeof(taskCloseMsg.szTaskId),
-											doc["taskId"].GetString(), nSize);
-										bValidTask = true;
-									}
-								}
-							}
-							if (doc.HasMember("datetime")) {
-								if (doc["datetime"].IsString()) {
-									size_t nSize = doc["datetime"].GetStringLength();
-									if (nSize) {
-										strncpy_s(szDatetime, sizeof(szDatetime), doc["datetime"].GetString(), nSize);
-										taskCloseMsg.ulMessageTime = strdatetime2time(szDatetime);
-										bValidDatetime = true;
-									}
-								}
-							}
-							if (bValidTask && bValidDatetime) {
-								handleTopicTaskCloseMsg(&taskCloseMsg);
-								storeTopicMsg(pMsg, taskCloseMsg.ulMessageTime);
-							}
-							else {
-								snprintf(szLog, sizeof(szLog), "[DbProx]%s[%d]close task data miss, uuid=%s, seq=%u, "
-									"task=%s, close=%d, stopdatetime=%s\r\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid,
-									pMsg->uiMsgSequence, bValidTask ? taskCloseMsg.szTaskId : "null", nState,
-									bValidDatetime ? szDatetime : "null");
-								LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-							}
-						}
-						else if (nSubType == TASK_OPT_MODIFY) {
-							TopicTaskModifyMessage taskModifyMsg;
-							bool bValidTask = false;
-							bool bValidDatetime = false;
-							char szDatetime[20] = { 0 };
-							if (doc.HasMember("taskId")) {
-								if (doc["taskId"].IsString()) {
-									size_t nSize = doc["taskId"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskModifyMsg.szTaskId, sizeof(taskModifyMsg.szTaskId), 
-											doc["taskId"].GetString(), nSize);
-										bValidTask = true;
-									}
-								}
-							}
-							if (doc.HasMember("handset")) {
-								if (doc["handset"].IsString()) {
-									size_t nSize = doc["handset"].GetStringLength();
-									if (nSize) {
-										strncpy_s(taskModifyMsg.szHandset, sizeof(taskModifyMsg.szHandset),
-											doc["handset"].GetString(), nSize);
-									}
-								}
-							}
-							if (doc.HasMember("datetime")) {
-								if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {									
-									strcpy_s(szDatetime, sizeof(szDatetime), doc["datetime"].GetString());
-									taskModifyMsg.ulMessageTime = strdatetime2time(szDatetime);
-									bValidDatetime = true;									
-								}
-							}
-							if (doc.HasMember("phone")) {
-								if (doc["phone"].IsString() && doc["phone"].GetStringLength()) {
-									strcpy_s(taskModifyMsg.szPhone, sizeof(taskModifyMsg.szPhone), doc["phone"].GetString());
-								}
-							}
-							if (bValidTask && bValidDatetime) {
-								handleTopicTaskModifyMsg(&taskModifyMsg);
-								storeTopicMsg(pMsg, taskModifyMsg.ulMessageTime);
-							}
-							else {
-								snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]modify task data miss, uuid=%s, seq=%u, "
-									"task=%s, handset=%s, datetime=%s\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid,
-									pMsg->uiMsgSequence, bValidTask ? taskModifyMsg.szTaskId : "null", taskModifyMsg.szHandset,
-									bValidDatetime ? szDatetime : "null");
-								LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
+								snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]MSG_TASK data, unsupport task type=%d\n",
+									__FUNCTION__, __LINE__, nSubType);
+								LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 							}
 						}
 						else {
-							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]MSG_TASK data, unsupport task type=%d\r\n",
-								__FUNCTION__, __LINE__, nSubType);
-							LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
+							snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]parse MSG_TASK msg data, uuid=%s, seq=%u, "
+								"parse JSON data error\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, pMsg->uiMsgSequence);
+							LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 						}
-					}
-					else {
-						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]parse MSG_TASK msg data, uuid=%s, seq=%u, "
-							"parse JSON data error\r\n", __FUNCTION__, __LINE__, pMsg->szMsgUuid, pMsg->uiMsgSequence);
-						LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 					}
 					break;
 				}
@@ -3042,9 +3060,117 @@ void DbProxy::dealTopicMsg()
 								case BUFFER_DEVICE: {
 									switch (nModifyType) {
 										case BUFFER_OPERATE_NEW: {
-											break;
 										}
 										case BUFFER_OPERATE_UPDATE: {
+											if (strcmp(pMsg->szMsgFrom, m_szPipelineIdentity) != 0) {
+												char szSqlDatetime[24] = { 0 };
+												unsigned long long ullDatetime = 0L;
+												size_t nSize = sizeof(escort::WristletDevice);
+												WristletDevice device;
+												memset(&device, 0, nSize);
+												if (doc.HasMember("deviceId")) {
+													if (doc["deviceId"].IsString() && doc["deviceId"].GetStringLength()) {
+														strcpy_s(device.deviceBasic.szDeviceId, sizeof(device.deviceBasic.szDeviceId),
+															doc["deviceId"].GetString());
+													}
+												}
+												if (doc.HasMember("factoryId")) {
+													if (doc["factoryId"].IsString() && doc["factoryId"].GetStringLength()) {
+														strcpy_s(device.deviceBasic.szFactoryId, sizeof(device.deviceBasic.szFactoryId),
+															doc["factoryId"].GetString());
+													}
+												}
+												if (doc.HasMember("orgId")) {
+													if (doc["orgId"].IsString() && doc["orgId"].GetStringLength()) {
+														strcpy_s(device.deviceBasic.szOrgId, sizeof(device.deviceBasic.szOrgId),
+															doc["orgId"].GetString());
+													}
+												}
+												if (doc.HasMember("battery")) {
+													if (doc["battery"].IsInt()) {
+														device.deviceBasic.nBattery = (unsigned short)doc["battery"].GetInt();
+													}
+												}
+												if (doc.HasMember("datetime")) {
+													if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
+														ullDatetime = strdatetime2time(doc["datetime"].GetString());
+														format_sqldatetime(ullDatetime, szSqlDatetime, sizeof(szSqlDatetime));
+													}
+												}
+												if (strlen(device.deviceBasic.szDeviceId) && strlen(device.deviceBasic.szOrgId)) {
+													bool bFlag = false;
+													char szSql[512] = { 0 };
+													pthread_mutex_lock(&g_mutex4DevList);
+													DeviceList::iterator iter = g_deviceList.find(device.deviceBasic.szDeviceId);
+													if (iter != g_deviceList.end()) {
+														auto pDev = iter->second;
+														if (pDev) {
+															bFlag = true;
+															if (strcmp(pDev->deviceBasic.szFactoryId, device.deviceBasic.szFactoryId) != 0) {
+																strcpy_s(pDev->deviceBasic.szFactoryId, sizeof(pDev->deviceBasic.szFactoryId), 
+																	device.deviceBasic.szFactoryId);
+															}
+															if (strcmp(pDev->deviceBasic.szOrgId, device.deviceBasic.szOrgId) != 0) {
+																strcpy_s(pDev->deviceBasic.szOrgId, sizeof(pDev->deviceBasic.szOrgId),
+																	device.deviceBasic.szOrgId);
+															}
+														}
+													}
+													else {
+														auto pDevice = (escort::WristletDevice *)zmalloc(nSize);
+														memcpy_s(pDevice, nSize, &device, nSize);
+														g_deviceList.emplace(pDevice->deviceBasic.szDeviceId, pDevice);
+													}
+													pthread_mutex_unlock(&g_mutex4DevList);
+
+													if (bFlag) {
+														sprintf_s(szSql, sizeof(szSql), "update device_info set orgId='%s', power=%d, "
+															"factoryId='%s' where deviceId='%s';", device.deviceBasic.szOrgId,
+															device.deviceBasic.nBattery, device.deviceBasic.szFactoryId,
+															device.deviceBasic.szDeviceId);
+													}
+													else {
+														sprintf_s(szSql, sizeof(szSql), "insert into device_info (deviceId, factoryId, "
+															"orgId, power, lastOptTime) values ('%s', '%s', '%s', %d, '%s');",
+															device.deviceBasic.szDeviceId, device.deviceBasic.szFactoryId,
+															device.deviceBasic.szOrgId, device.deviceBasic.nBattery, szSqlDatetime);
+													}
+													unsigned int uiSqlLen = (unsigned int)strlen(szSql);
+													auto pTrans = (dbproxy::SqlTransaction *)zmalloc(sizeof(dbproxy::SqlTransaction));
+													pTrans->uiSqlCount = 1;
+													pTrans->uiTransactionSequence = getNextInteractSequence();
+													pTrans->ulTransactionTime = ullDatetime;
+													pTrans->szTransactionFrom[0] = '\0';
+													pTrans->pSqlList = (dbproxy::SqlStatement *)malloc(pTrans->uiSqlCount 
+														* sizeof(dbproxy::SqlStatement));
+													pTrans->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_DEVICE;
+													pTrans->pSqlList[0].uiStatementLen = uiSqlLen;
+													pTrans->pSqlList[0].pStatement = (char *)malloc(uiSqlLen + 1);
+													strcpy_s(pTrans->pSqlList[0].pStatement, uiSqlLen + 1, szSql);
+													pTrans->pSqlList[0].pStatement[uiSqlLen] = '\0';
+													if (!addSqlTransaction(pTrans, SQLTYPE_EXECUTE)) {
+														if (pTrans) {
+															for (unsigned int i = 0; i != pTrans->uiSqlCount; i++) {
+																if (pTrans->pSqlList[i].pStatement) {
+																	free(pTrans->pSqlList[i].pStatement);
+																	pTrans->pSqlList[i].pStatement = NULL;
+																	pTrans->pSqlList[i].uiStatementLen = 0;
+																}
+															}
+															free(pTrans->pSqlList);
+															pTrans->pSqlList = NULL;
+															free(pTrans);
+															pTrans = NULL;
+														}
+													}
+													char szLog[512] = { 0 };
+													sprintf_s(szLog, sizeof(szLog), "[dbproxy]%s[%u]update deviceId=%s, factory=%s, org=%s,"
+														" battery=%d\n", __FUNCTION__, __LINE__, device.deviceBasic.szDeviceId, 
+														device.deviceBasic.szFactoryId, device.deviceBasic.szOrgId, 
+														device.deviceBasic.nBattery);
+													LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, pf_logger::eLOGTYPE_FILE);
+												}
+											}
 											break;
 										}
 										case BUFFER_OPERATE_DELETE: {
@@ -3072,9 +3198,14 @@ void DbProxy::dealTopicMsg()
 												}
 												if (strlen(szDeviceId) && strlen(szFactoryId)) {
 													pthread_mutex_lock(&g_mutex4DevList);
-													if (zhash_size(g_deviceList)) {
-														//WristletDevice * pDevice = (WristletDevice *)zhash_lookup(g_deviceList, szDeviceId);
-														zhash_delete(g_deviceList, szDeviceId);
+													DeviceList::iterator iter = g_deviceList.find(szDeviceId);
+													if (iter != g_deviceList.end()) {
+														auto pDevice = iter->second;
+														if (pDevice) {
+															free(pDevice);
+															pDevice = NULL;
+														}
+														g_deviceList.erase(iter);
 													}
 													pthread_mutex_unlock(&g_mutex4DevList);
 												}
@@ -3090,9 +3221,108 @@ void DbProxy::dealTopicMsg()
 								case BUFFER_GUARDER: {
 									switch (nModifyType) {
 										case BUFFER_OPERATE_NEW: {
-											break;
 										}
 										case BUFFER_OPERATE_UPDATE: {
+											if (strcmp(pMsg->szMsgFrom, m_szPipelineIdentity) != 0) {
+												char szSqlDatetime[24] = { 0 };
+												unsigned long long ullDatetime = 0L;
+												size_t nSize = sizeof(escort::Guarder);
+												auto pGuarder = (escort::Guarder *)zmalloc(nSize);
+												memset(pGuarder, 0, nSize);
+												if (doc.HasMember("guarder")) {
+													if (doc["guarder"].IsString() && doc["guarder"].GetStringLength()) {
+														strcpy_s(pGuarder->szId, sizeof(pGuarder->szId), doc["guarder"].GetString());
+													}
+												}
+												if (doc.HasMember("orgId")) {
+													if (doc["orgId"].IsString() && doc["orgId"].GetStringLength()) {
+														strcpy_s(pGuarder->szOrg, sizeof(pGuarder->szOrg), doc["orgId"].GetString());
+													}
+												}
+												if (doc.HasMember("roleType")) {
+													if (doc["roleType"].IsInt()) {
+														pGuarder->usRoleType = (unsigned short)doc["roleType"].GetInt();
+													}
+												}
+												if (doc.HasMember("name")) {
+													if (doc["name"].IsString() && doc["name"].GetStringLength()) {
+														strcpy_s(pGuarder->szTagName, sizeof(pGuarder->szTagName), doc["name"].GetString());
+													}
+												}
+												if (doc.HasMember("passwd")) {
+													if (doc["passwd"].IsString() && doc["passwd"].GetStringLength()) {
+														strcpy_s(pGuarder->szPassword, sizeof(pGuarder->szPassword), doc["passwd"].GetString());
+													}
+												}
+												if (doc.HasMember("datetime")) {
+													if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
+														ullDatetime = strdatetime2time(doc["datetime"].GetString());
+														format_sqldatetime(ullDatetime, szSqlDatetime, sizeof(szSqlDatetime));
+													}
+												}
+												if (strlen(pGuarder->szId) && strlen(pGuarder->szOrg) && strlen(pGuarder->szPassword)) {
+													bool bFlag = false; //false: insert, true: update
+													pthread_mutex_lock(&g_mutex4GuarderList);
+													auto p = (escort::Guarder *)zhash_lookup(g_guarderList, pGuarder->szId);
+													if (p != NULL) {
+														bFlag = true;
+														zhash_delete(g_guarderList, pGuarder->szId);
+													}
+													zhash_update(g_guarderList, pGuarder->szId, pGuarder);
+													zhash_freefn(g_guarderList, pGuarder->szId, free);
+													pthread_mutex_unlock(&g_mutex4GuarderList);
+													char szSql[512] = { 0 };
+													if (bFlag) {
+														sprintf_s(szSql, sizeof(szSql), "update user_info set OrgId='%s', Password='%s', "
+															"UserName='%s', RoleType=%d, LastOptTime='%s' where userId='%s';)", pGuarder->szOrg,
+															pGuarder->szPassword, pGuarder->szTagName, pGuarder->usRoleType, szSqlDatetime, 
+															pGuarder->szId);
+													}
+													else {
+														sprintf_s(szSql, sizeof(szSql), "insert into user_info (UserId, UserName, Password, "
+															"RoleType, OrgId, LastOptTime) values ('%s', '%s', '%s', %d, '%s', '%s');",
+															pGuarder->szId, pGuarder->szTagName, pGuarder->szPassword, pGuarder->usRoleType,
+															pGuarder->szOrg, szSqlDatetime);
+													}
+													unsigned int uiSqlLen = (unsigned int)strlen(szSql);
+													auto pTrans = (dbproxy::SqlTransaction *)zmalloc(sizeof(dbproxy::SqlTransaction));
+													pTrans->uiSqlCount = 1;
+													pTrans->uiTransactionSequence = getNextInteractSequence();
+													pTrans->ulTransactionTime = ullDatetime;
+													pTrans->szTransactionFrom[0] = '\0';
+													pTrans->pSqlList = (dbproxy::SqlStatement *)malloc(pTrans->uiSqlCount * sizeof(dbproxy::SqlStatement));
+													pTrans->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_GUARDER;
+													pTrans->pSqlList[0].uiStatementLen = uiSqlLen;
+													pTrans->pSqlList[0].pStatement = (char *)malloc(uiSqlLen + 1);
+													strcpy_s(pTrans->pSqlList[0].pStatement, uiSqlLen + 1, szSql);
+													pTrans->pSqlList[0].pStatement[uiSqlLen] = '\0';
+													if (!addSqlTransaction(pTrans, SQLTYPE_EXECUTE)) {
+														if (pTrans) {
+															for (unsigned int i = 0; i != pTrans->uiSqlCount; i++) {
+																if (pTrans->pSqlList[i].pStatement) {
+																	free(pTrans->pSqlList[i].pStatement);
+																	pTrans->pSqlList[i].pStatement = NULL;
+																	pTrans->pSqlList[i].uiStatementLen = 0;
+																}
+															}
+															free(pTrans->pSqlList);
+															pTrans->pSqlList = NULL;
+															free(pTrans);
+															pTrans = NULL;
+														}
+													}
+													char szLog[512] = { 0 };
+													sprintf_s(szLog, sizeof(szLog), "[dbproxy]%s[%u]update userId=%s, passwd=%s, org=%s, "
+														"roleType=%d\n", __FUNCTION__, __LINE__, pGuarder->szId, pGuarder->szPassword, 
+														pGuarder->szOrg, pGuarder->usRoleType);
+													LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, pf_logger::eLOGTYPE_FILE);
+												}
+												else {
+													free(pGuarder);
+													pGuarder = NULL;
+												}
+
+											}
 											break;
 										}
 										case BUFFER_OPERATE_DELETE: {
@@ -3130,9 +3360,94 @@ void DbProxy::dealTopicMsg()
 								case BUFFER_ORG: {
 									switch (nModifyType) {
 										case BUFFER_OPERATE_NEW: {
-											break;
 										}
 										case BUFFER_OPERATE_UPDATE: {
+											if (strcmp(pMsg->szMsgFrom, m_szPipelineIdentity) != 0) {
+												unsigned long long ullDatetime = 0L;
+												char szSqlDatetime[24] = { 0 };
+												bool bFlag = false;
+												size_t nSize = sizeof(escort::Organization);
+												auto pOrg = (escort::Organization *)malloc(nSize);
+												if (doc.HasMember("orgId")) {
+													if (doc["orgId"].IsString() && doc["orgId"].GetStringLength()) {
+														strcpy_s(pOrg->szOrgId, sizeof(pOrg->szOrgId), doc["orgId"].GetString());
+													}
+												}
+												if (doc.HasMember("orgName")) {
+													if (doc["orgName"].IsString() && doc["orgName"].GetStringLength()) {
+														strcpy_s(pOrg->szOrgName, sizeof(pOrg->szOrgName), doc["orgName"].GetString());
+													}
+												}
+												if (doc.HasMember("parentId")) {
+													if (doc["parentId"].IsString() && doc["parentId"].GetStringLength()) {
+														strcpy_s(pOrg->szParentOrgId, sizeof(pOrg->szParentOrgId),
+															doc["parentId"].GetString());
+													}
+												}
+												if (doc.HasMember("datetime")) {
+													if (doc["datetime"].IsString() && doc["datetime"].GetStringLength()) {
+														ullDatetime = strdatetime2time(doc["datetime"].GetString());
+														format_sqldatetime(ullDatetime, szSqlDatetime, sizeof(szSqlDatetime));
+													}
+												}
+												char szSql[512] = { 0 };
+												if (strlen(pOrg->szOrgId)) {
+													pthread_mutex_lock(&g_mutex4OrgList);
+													auto p = (escort::Organization *)zhash_lookup(g_orgList, pOrg->szOrgId);
+													if (p) {
+														zhash_delete(g_orgList, pOrg->szOrgId);
+														bFlag = true;
+													}
+													zhash_update(g_orgList, pOrg->szOrgId, pOrg);
+													zhash_freefn(g_orgList, pOrg->szOrgId, free);
+													pthread_mutex_unlock(&g_mutex4OrgList);
+													if (bFlag) {
+														sprintf_s(szSql, sizeof(szSql), "update org_info set OrgName='%s', parentId='%s',"
+															" LastOptTime='%s' where OrgId='%s';", pOrg->szOrgName, pOrg->szParentOrgId, 
+															szSqlDatetime, pOrg->szOrgId);
+													}
+													else {
+														sprintf_s(szSql, sizeof(szSql), "insert into org_info (orgId, orgName, parentId, "
+															"lastOptTime) values ('%s', '%s', '%s', '%s');", pOrg->szOrgId, pOrg->szOrgName,
+															pOrg->szParentOrgId, szSqlDatetime);
+													}
+													unsigned int uiSqlLen = (unsigned int)strlen(szSql);
+													auto pTrans = (dbproxy::SqlTransaction *)zmalloc(sizeof(dbproxy::SqlTransaction));
+													pTrans->uiSqlCount = 1;
+													pTrans->uiTransactionSequence = getNextInteractSequence();
+													pTrans->ulTransactionTime = ullDatetime;
+													pTrans->szTransactionFrom[0] = '\0';
+													pTrans->pSqlList = (dbproxy::SqlStatement *)malloc(pTrans->uiSqlCount * sizeof(dbproxy::SqlStatement));
+													pTrans->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_ORG;
+													pTrans->pSqlList[0].uiStatementLen = uiSqlLen;
+													pTrans->pSqlList[0].pStatement = (char *)malloc(uiSqlLen + 1);
+													strcpy_s(pTrans->pSqlList[0].pStatement, uiSqlLen + 1, szSql);
+													pTrans->pSqlList[0].pStatement[uiSqlLen] = '\0';
+													if (!addSqlTransaction(pTrans, SQLTYPE_EXECUTE)) {
+														if (pTrans) {
+															for (unsigned int i = 0; i != pTrans->uiSqlCount; i++) {
+																if (pTrans->pSqlList[i].pStatement) {
+																	free(pTrans->pSqlList[i].pStatement);
+																	pTrans->pSqlList[i].pStatement = NULL;
+																	pTrans->pSqlList[i].uiStatementLen = 0;
+																}
+															}
+															free(pTrans->pSqlList);
+															pTrans->pSqlList = NULL;
+															free(pTrans);
+															pTrans = NULL;
+														}
+													}
+													char szLog[512] = { 0 };
+													sprintf_s(szLog, sizeof(szLog), "[dbproxy]%s[%u]update orgId=%s, parentId=%s\n",
+														__FUNCTION__, __LINE__, pOrg->szOrgId, pOrg->szParentOrgId);
+													LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+												}
+												else {
+													free(pOrg);
+													pOrg = NULL;
+												}
+											}
 											break;
 										}
 										case BUFFER_OPERATE_DELETE: {
@@ -3552,29 +3867,32 @@ int DbProxy::handleTopicDeviceAliveMsg(TopicAliveMessage * pAliveMsg_)
 		bool bLastest = false;
 		bool bUpdateState = false;
 		pthread_mutex_lock(&g_mutex4DevList);
-		if (zhash_size(g_deviceList)) {
-			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pAliveMsg_->szDeviceId);
-			if (pDev) {
-				if (pDev->deviceBasic.nOnline == 0) {
-					pDev->deviceBasic.nOnline = 1;
-					bUpdateState = true;
-				}
-				if (pDev->deviceBasic.ulLastActiveTime <= pAliveMsg_->ulMessageTime) {
-					pDev->deviceBasic.ulLastActiveTime = pAliveMsg_->ulMessageTime;
-					pDev->deviceBasic.nBattery = pAliveMsg_->usBattery;
-					if (pDev->deviceBasic.nBattery >= BATTERY_THRESHOLD) {
-						if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER) {
-							pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
-						}
-					} 
-					else {
-						if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == 0) {
-							pDev->deviceBasic.nStatus += DEV_LOWPOWER;
-						}
+		if (!g_deviceList.empty()) {
+			DeviceList::iterator iter = g_deviceList.find(pAliveMsg_->szDeviceId);
+			if (iter != g_deviceList.end()) {
+				WristletDevice * pDev = iter->second;
+				if (pDev) {
+					if (pDev->deviceBasic.nOnline == 0) {
+						pDev->deviceBasic.nOnline = 1;
+						bUpdateState = true;
 					}
-					bLastest = true;
+					if (pDev->deviceBasic.ulLastActiveTime <= pAliveMsg_->ulMessageTime) {
+						pDev->deviceBasic.ulLastActiveTime = pAliveMsg_->ulMessageTime;
+						pDev->deviceBasic.nBattery = pAliveMsg_->usBattery;
+						if (pDev->deviceBasic.nBattery >= BATTERY_THRESHOLD) {
+							if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER) {
+								pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
+							}
+						}
+						else {
+							if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == 0) {
+								pDev->deviceBasic.nStatus += DEV_LOWPOWER;
+							}
+						}
+						bLastest = true;
+					}
+					result = 0;
 				}
-				result = 0;
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -3628,28 +3946,31 @@ int DbProxy::handleTopicDeviceOnlineMsg(TopicOnlineMessage * pOnlineMsg_)
 		char szGuarder[20] = { 0 };
 		char szTask[20] = { 0 };
 		pthread_mutex_lock(&g_mutex4DevList);
-		if (zhash_size(g_deviceList)) {
-			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pOnlineMsg_->szDeviceId);
-			if (pDev) {
-				if (pDev->deviceBasic.nOnline == 0) {
-					pDev->deviceBasic.nOnline = 1;
-				}
-				if (pDev->deviceBasic.ulLastActiveTime < pOnlineMsg_->ulMessageTime) {
-					pDev->deviceBasic.ulLastActiveTime = pOnlineMsg_->ulMessageTime;
-					pDev->deviceBasic.nBattery = pOnlineMsg_->usBattery;
-					if (pDev->deviceBasic.nBattery < BATTERY_THRESHOLD) { //lowpower
-						if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == 0) {
-							pDev->deviceBasic.nStatus += DEV_LOWPOWER;
-						}
+		if (!g_deviceList.empty()) {
+			DeviceList::iterator iter = g_deviceList.find(pOnlineMsg_->szDeviceId);
+			if (iter != g_deviceList.end()) {
+				WristletDevice * pDev = iter->second;
+				if (pDev) {
+					if (pDev->deviceBasic.nOnline == 0) {
+						pDev->deviceBasic.nOnline = 1;
 					}
-					else {
-						if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER) {
-							pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
+					if (pDev->deviceBasic.ulLastActiveTime < pOnlineMsg_->ulMessageTime) {
+						pDev->deviceBasic.ulLastActiveTime = pOnlineMsg_->ulMessageTime;
+						pDev->deviceBasic.nBattery = pOnlineMsg_->usBattery;
+						if (pDev->deviceBasic.nBattery < BATTERY_THRESHOLD) { //lowpower
+							if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == 0) {
+								pDev->deviceBasic.nStatus += DEV_LOWPOWER;
+							}
 						}
+						else {
+							if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER) {
+								pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
+							}
+						}
+						bLastest = true;
 					}
-					bLastest = true;
+					result = 0;
 				}
-				result = 0;
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -3714,19 +4035,21 @@ int DbProxy::handleTopicDeviceOfflineMsg(TopicOfflineMessage * pOfflineMsg_)
 	bool bHaveTask = true;
 	if (pOfflineMsg_) {
 		pthread_mutex_lock(&g_mutex4DevList);
-		if (zhash_size(g_deviceList)) {
-			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, 
-				pOfflineMsg_->szDeviceId);
-			if (pDev) {
-				result = 0;
-				if (pDev->deviceBasic.nOnline) {
-					pDev->deviceBasic.nOnline = 0;
-				}
-				if (pOfflineMsg_->ulMessageTime >= pDev->deviceBasic.ulLastActiveTime) {
-					if (strlen(pDev->szBindGuard)) {
-						strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
+		if (!g_deviceList.empty()) {
+			DeviceList::iterator iter = g_deviceList.find(pOfflineMsg_->szDeviceId);
+			if (iter != g_deviceList.end()) {
+				WristletDevice * pDev = iter->second;
+				if (pDev) {
+					result = 0;
+					if (pDev->deviceBasic.nOnline) {
+						pDev->deviceBasic.nOnline = 0;
 					}
-					bLastest = true;
+					if (pOfflineMsg_->ulMessageTime >= pDev->deviceBasic.ulLastActiveTime) {
+						if (strlen(pDev->szBindGuard)) {
+							strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
+						}
+						bLastest = true;
+					}
 				}
 			}
 		}
@@ -3766,7 +4089,7 @@ int DbProxy::handleTopicDeviceOfflineMsg(TopicOfflineMessage * pOfflineMsg_)
 			pTransaction->ulTransactionTime = ulTime;
 			pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
 				* sizeof(dbproxy::SqlStatement));
-			pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_DEVICE;
+			pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_ALARM;
 			size_t nSqlLen = strlen(szDevSql);
 			pTransaction->pSqlList[0].uiStatementLen = (unsigned int)nSqlLen;
 			pTransaction->pSqlList[0].pStatement = (char *)zmalloc(nSqlLen + 1);
@@ -3801,17 +4124,20 @@ int DbProxy::handleTopicBindMsg(TopicBindMessage * pBindMsg_)
 	int result = -1;
 	if (pBindMsg_) {
 		pthread_mutex_lock(&g_mutex4DevList);
-		if (zhash_size(g_deviceList)) {
-			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pBindMsg_->szDeviceId);
-			if (pDev) {
-				result = 0;
-				strncpy_s(pDev->szBindGuard, sizeof(pDev->szBindGuard), pBindMsg_->szGuarder, 
-					strlen(pBindMsg_->szGuarder));
-				pDev->ulBindTime = pBindMsg_->ulMessageTime;
-				if (pDev->deviceBasic.ulLastActiveTime < pBindMsg_->ulMessageTime) {
-					pDev->deviceBasic.ulLastActiveTime = pBindMsg_->ulMessageTime;
+		if (!g_deviceList.empty()) {
+			DeviceList::iterator iter = g_deviceList.find(pBindMsg_->szDeviceId);
+			if (iter != g_deviceList.end()) {
+				WristletDevice * pDev = iter->second;
+				if (pDev) {
+					result = 0;
+					strncpy_s(pDev->szBindGuard, sizeof(pDev->szBindGuard), pBindMsg_->szGuarder,
+						strlen(pBindMsg_->szGuarder));
+					pDev->ulBindTime = pBindMsg_->ulMessageTime;
+					if (pDev->deviceBasic.ulLastActiveTime < pBindMsg_->ulMessageTime) {
+						pDev->deviceBasic.ulLastActiveTime = pBindMsg_->ulMessageTime;
+					}
+					pDev->deviceBasic.nBattery = pBindMsg_->usBattery;
 				}
-				pDev->deviceBasic.nBattery = pBindMsg_->usBattery;
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -3904,11 +4230,14 @@ int DbProxy::handleTopicTaskSubmitMsg(TopicTaskMessage * pTaskMsg_)
 		pthread_mutex_unlock(&g_mutex4GuarderList);
 
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pTaskMsg_->szDeviceId);
-		if (pDev) {
-			pDev->deviceBasic.ulLastActiveTime = pTaskMsg_->ulMessageTime;
-			changeDeviceStatus(DEV_GUARD, pDev->deviceBasic.nStatus);
-			strcpy_s(pDev->szBindGuard, sizeof(pDev->szBindGuard), pTaskMsg_->szGuarder);
+		DeviceList::iterator iter = g_deviceList.find(pTaskMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			WristletDevice * pDev = iter->second;
+			if (pDev) {
+				pDev->deviceBasic.ulLastActiveTime = pTaskMsg_->ulMessageTime;
+				changeDeviceStatus(DEV_GUARD, pDev->deviceBasic.nStatus);
+				strcpy_s(pDev->szBindGuard, sizeof(pDev->szBindGuard), pTaskMsg_->szGuarder);
+			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
 		
@@ -4043,17 +4372,20 @@ int DbProxy::handleTopicTaskCloseMsg(TopicTaskCloseMessage * pCloseTaskMsg_)
 
 		if (bExists) {
 			pthread_mutex_lock(&g_mutex4DevList);
-			WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, szDeviceId);
-			if (pDev) {
-				changeDeviceStatus(DEV_NORMAL, pDev->deviceBasic.nStatus);
-				if (pDev->deviceBasic.nLooseStatus == 1) {
-					pDev->deviceBasic.nStatus += DEV_LOOSE;
+			DeviceList::iterator iter = g_deviceList.find(szDeviceId);
+			if (iter != g_deviceList.end()) {
+				WristletDevice * pDev = iter->second;
+				if (pDev) {
+					changeDeviceStatus(DEV_NORMAL, pDev->deviceBasic.nStatus);
+					if (pDev->deviceBasic.nLooseStatus == 1) {
+						pDev->deviceBasic.nStatus += DEV_LOOSE;
+					}
+					if (pDev->deviceBasic.nBattery < BATTERY_THRESHOLD) {
+						pDev->deviceBasic.nStatus += DEV_LOWPOWER;
+					}
+					pDev->deviceBasic.ulLastActiveTime = pCloseTaskMsg_->ulMessageTime;
+					pDev->szBindGuard[0] = '\0';
 				}
-				if (pDev->deviceBasic.nBattery < BATTERY_THRESHOLD) {
-					pDev->deviceBasic.nStatus += DEV_LOWPOWER;
-				}
-				pDev->deviceBasic.ulLastActiveTime = pCloseTaskMsg_->ulMessageTime;
-				pDev->szBindGuard[0] = '\0';
 			}
 			pthread_mutex_unlock(&g_mutex4DevList);
 
@@ -4263,38 +4595,36 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 {
 	int result = -1;
 	if (pGpsLocateMsg_) {
-		bool bLastest = false;
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList,
-			pGpsLocateMsg_->szDeviceId);
+		DeviceList::iterator iter = g_deviceList.find(pGpsLocateMsg_->szDeviceId);
+		WristletDevice * pDev = iter->second;
 		char szTaskId[16] = { 0 };
-		char szGuarder[20] = { 0 };
+		char szGuarder[20] =  { 0 };
 		int nFleeFlag = 0;
+		bool bLastest = false;
 		if (pDev) {
 			if (strlen(pDev->szBindGuard)) {
 				strncpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard, strlen(pDev->szBindGuard));
 			}
 			if (pGpsLocateMsg_->nFlag == 1) { //realtime
-				if (pDev->ulLastDeviceLocateTime <= pGpsLocateMsg_->ulMessageTime) {
-					pDev->ulLastDeviceLocateTime = pGpsLocateMsg_->ulMessageTime;
-					pDev->nLastLocateType = LOCATE_GPS;
-					pDev->deviceBasic.nBattery = pGpsLocateMsg_->usBattery;
-					pDev->devicePosition.dLatitude = pGpsLocateMsg_->dLat;
-					pDev->devicePosition.dLngitude = pGpsLocateMsg_->dLng;
-					pDev->devicePosition.usLatType = pGpsLocateMsg_->usLatType;
-					pDev->devicePosition.usLngType = pGpsLocateMsg_->usLngType;
-					if (pDev->deviceBasic.nBattery >= BATTERY_THRESHOLD) { //normal
-						if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER) {
-							pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
-						}
+				bLastest = true;
+				pDev->ulLastDeviceLocateTime = pGpsLocateMsg_->ulMessageTime;
+				pDev->nLastLocateType = LOCATE_GPS;
+				pDev->deviceBasic.nBattery = pGpsLocateMsg_->usBattery;
+				pDev->devicePosition.dLatitude = pGpsLocateMsg_->dLat;
+				pDev->devicePosition.dLngitude = pGpsLocateMsg_->dLng;
+				pDev->devicePosition.usLatType = pGpsLocateMsg_->usLatType;
+				pDev->devicePosition.usLngType = pGpsLocateMsg_->usLngType;
+				if (pDev->deviceBasic.nBattery >= BATTERY_THRESHOLD) { //normal
+					if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER) {
+						pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
 					}
-					else { //lowpower
-						if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == 0) {
-							pDev->deviceBasic.nStatus += DEV_LOWPOWER;
-						}
-					}
-					bLastest = true;
 				}
+				else { //lowpower
+					if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == 0) {
+						pDev->deviceBasic.nStatus += DEV_LOWPOWER;
+					}
+				}		
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -4382,7 +4712,7 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 			char szDevSql[512] = { 0 };
 			snprintf(szDevSql, sizeof(szDevSql), "update device_info set LastLocation='%s', Latitude=%.06f, Longitude=%.06f,"
 				" LocationType=%d, Power=%u, Speed=%.04f, Coruse=%d, Coordinate=%d, LastOptTime='%s', LastCommuncation='%s' "
-				"where DeviceID='%s';", szSqlDatetime, pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, escort_db::E_LOCATE_GPS, 
+				"where DeviceID='%s';", szSqlDatetime, pGpsLocateMsg_->dLat, pGpsLocateMsg_->dLng, escort_db::E_LOCATE_GPS,
 				pGpsLocateMsg_->usBattery, pGpsLocateMsg_->dSpeed, (int)pGpsLocateMsg_->dDirection, pGpsLocateMsg_->nCoordinate,
 				szSqlNow, szSqlNow, pGpsLocateMsg_->szDeviceId);
 			dbproxy::SqlTransaction * pTransaction2 = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
@@ -4421,17 +4751,18 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 		char szGuarder[20] = { 0 };
 		char szTaskId[16] = { 0 };
 		int nFleeFlag = 0;
-		bool bLastest = false;
 		unsigned short usBattery = pLbsLocateMsg_->usBattery;
-
+		bool bLastest = false;
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pLbsLocateMsg_->szDeviceId);
-		if (pDev) {
-			if (strlen(pDev->szBindGuard)) {
-				strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
-			}
-			if (pLbsLocateMsg_->usFlag == 1) {
-				if (pDev->ulLastDeviceLocateTime <= pLbsLocateMsg_->ulMessageTime) {
+		DeviceList::iterator iter = g_deviceList.find(pLbsLocateMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			WristletDevice * pDev = iter->second;
+			if (pDev) {
+				if (strlen(pDev->szBindGuard)) {
+					strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
+				}
+				if (pLbsLocateMsg_->usFlag == 1) {
+					bLastest = true;
 					pDev->nLastLocateType = LOCATE_LBS;
 					pDev->ulLastDeviceLocateTime = pLbsLocateMsg_->ulMessageTime;
 					pDev->devicePosition.dLatitude = pLbsLocateMsg_->dLat;
@@ -4454,7 +4785,6 @@ int DbProxy::handleTopicLbsLocateMsg(TopicLocateMessageLbs * pLbsLocateMsg_)
 							pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
 						}
 					}
-					bLastest = true;
 				}
 			}
 		}
@@ -4587,18 +4917,21 @@ int DbProxy::handleTopicAppLocateMsg(TopicLocateMessageApp * pLocateMsg_)
 		unsigned short usBattery = pLocateMsg_->usBattery;
 
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, pLocateMsg_->szDeviceId);
-		if (pDev) {
-			if (strlen(pDev->szBindGuard)) {
-				strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
-			}
-			if (pDev->ulLastGuarderLocateTime < pLocateMsg_->ulMessageTime) {
-				pDev->ulLastGuarderLocateTime = pLocateMsg_->ulMessageTime;
-				pDev->guardPosition.dLatitude = pLocateMsg_->dLat;
-				pDev->guardPosition.dLngitude = pLocateMsg_->dLng;
-				pDev->guardPosition.nCoordinate = pLocateMsg_->nCoordinate;
-				pDev->nLastLocateType = LOCATE_APP;
-				bLastest = true;
+		DeviceList::iterator iter = g_deviceList.find(pLocateMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			WristletDevice * pDev = iter->second;
+			if (pDev) {
+				if (strlen(pDev->szBindGuard)) {
+					strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
+				}
+				if (pDev->ulLastGuarderLocateTime < pLocateMsg_->ulMessageTime) {
+					pDev->ulLastGuarderLocateTime = pLocateMsg_->ulMessageTime;
+					pDev->guardPosition.dLatitude = pLocateMsg_->dLat;
+					pDev->guardPosition.dLngitude = pLocateMsg_->dLng;
+					pDev->guardPosition.nCoordinate = pLocateMsg_->nCoordinate;
+					pDev->nLastLocateType = LOCATE_APP;
+					bLastest = true;
+				}
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -4729,34 +5062,36 @@ int DbProxy::handleTopicLowpoweAlarmMsg(TopicAlarmMessageLowpower * pLowpoweAlar
 		char szGuarder[20] = { 0 };
 		char szTaskId[16] = { 0 };
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList,
-			pLowpoweAlarmMsg_->szDeviceId);
-		if (pDev) {
-			bool bLowpower = (pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER;
-			if (pDev->deviceBasic.ulLastActiveTime < pLowpoweAlarmMsg_->ulMessageTime) {
-				pDev->deviceBasic.ulLastActiveTime = pLowpoweAlarmMsg_->ulMessageTime;
-			}
-			if (pDev->ulLastLowPowerAlertTime < pLowpoweAlarmMsg_->ulMessageTime) {
-				pDev->ulLastLowPowerAlertTime = pLowpoweAlarmMsg_->ulMessageTime;
-				pDev->deviceBasic.nBattery = (unsigned char)pLowpoweAlarmMsg_->usBattery;
-				if (pLowpoweAlarmMsg_->usMode == 0) {//lowpowe
-					if (!bLowpower) {
-						//changeDeviceStatus(DEV_LOWPOWER, pDev->deviceBasic.nStatus);
-						pDev->deviceBasic.nStatus += DEV_LOWPOWER;
-						bLastest = true;
+		DeviceList::iterator iter = g_deviceList.find(pLowpoweAlarmMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			auto pDev = iter->second;
+			if (pDev) {
+				bool bLowpower = (pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER;
+				if (pDev->deviceBasic.ulLastActiveTime < pLowpoweAlarmMsg_->ulMessageTime) {
+					pDev->deviceBasic.ulLastActiveTime = pLowpoweAlarmMsg_->ulMessageTime;
+				}
+				if (pDev->ulLastLowPowerAlertTime < pLowpoweAlarmMsg_->ulMessageTime) {
+					pDev->ulLastLowPowerAlertTime = pLowpoweAlarmMsg_->ulMessageTime;
+					pDev->deviceBasic.nBattery = (unsigned char)pLowpoweAlarmMsg_->usBattery;
+					if (pLowpoweAlarmMsg_->usMode == 0) {//lowpowe
+						if (!bLowpower) {
+							//changeDeviceStatus(DEV_LOWPOWER, pDev->deviceBasic.nStatus);
+							pDev->deviceBasic.nStatus += DEV_LOWPOWER;
+							bLastest = true;
+						}
+					}
+					else {//normal
+						if (bLowpower) {
+							pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
+							bLastest = true;
+						}
 					}
 				}
-				else {//normal
-					if (bLowpower) { 
-						pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
-						bLastest = true;
-					}
+				bWork = ((pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD)
+					|| ((pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE);
+				if (bWork && strlen(pDev->szBindGuard)) {
+					strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
 				}
-			}	
-			bWork = ((pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD)
-				|| ((pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE);
-			if (bWork && strlen(pDev->szBindGuard)) {
-				strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -4847,32 +5182,34 @@ int DbProxy::handleTopicLooseAlarmMsg(TopicAlarmMessageLoose * pLooseAlarmMsg_)
 		char szGuarder[20] = { 0 };
 		char szTaskId[16] = { 0 };
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, 
-			pLooseAlarmMsg_->szDeviceId);
-		if (pDev) {
-			if (pDev->deviceBasic.ulLastActiveTime < pLooseAlarmMsg_->ulMessageTime) {
-				pDev->deviceBasic.ulLastActiveTime = pLooseAlarmMsg_->ulMessageTime;
-			}
-			bWork = ((pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD)
-				|| ((pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE);
-			if (bWork && strlen(pDev->szBindGuard)) {
-				strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
-			}
-			if (pDev->ulLastLooseAlertTime < pLooseAlarmMsg_->ulMessageTime) {
-				pDev->ulLastLooseAlertTime = pLooseAlarmMsg_->ulMessageTime;
-				pDev->deviceBasic.nBattery = pLooseAlarmMsg_->usBattery;
-				if (pLooseAlarmMsg_->usMode == 0) {//loose
-					if (pDev->deviceBasic.nLooseStatus == 0) {
-						pDev->deviceBasic.nStatus += DEV_LOOSE;
-						pDev->deviceBasic.nLooseStatus = 1; //means true;
-						bLastest = true;
-					}
+		DeviceList::iterator iter = g_deviceList.find(pLooseAlarmMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			WristletDevice * pDev = iter->second;
+			if (pDev) {
+				if (pDev->deviceBasic.ulLastActiveTime < pLooseAlarmMsg_->ulMessageTime) {
+					pDev->deviceBasic.ulLastActiveTime = pLooseAlarmMsg_->ulMessageTime;
 				}
-				else {
-					if (pDev->deviceBasic.nLooseStatus == 1) { //loose revoke
-						pDev->deviceBasic.nStatus -= DEV_LOOSE;
-						pDev->deviceBasic.nLooseStatus = 0;
-						bLastest = true;
+				bWork = ((pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD)
+					|| ((pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE);
+				if (bWork && strlen(pDev->szBindGuard)) {
+					strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
+				}
+				if (pDev->ulLastLooseAlertTime < pLooseAlarmMsg_->ulMessageTime) {
+					pDev->ulLastLooseAlertTime = pLooseAlarmMsg_->ulMessageTime;
+					pDev->deviceBasic.nBattery = pLooseAlarmMsg_->usBattery;
+					if (pLooseAlarmMsg_->usMode == 0) {//loose
+						if (pDev->deviceBasic.nLooseStatus == 0) {
+							pDev->deviceBasic.nStatus += DEV_LOOSE;
+							pDev->deviceBasic.nLooseStatus = 1; //means true;
+							bLastest = true;
+						}
+					}
+					else {
+						if (pDev->deviceBasic.nLooseStatus == 1) { //loose revoke
+							pDev->deviceBasic.nStatus -= DEV_LOOSE;
+							pDev->deviceBasic.nLooseStatus = 0;
+							bLastest = true;
+						}
 					}
 				}
 			}
@@ -4981,30 +5318,32 @@ int DbProxy::handleTopicFleeAlarmMsg(TopicAlarmMessageFlee * pFleeAlarmMsg_)
 		pthread_mutex_unlock(&g_mutex4TaskList);
 
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, 
-			pFleeAlarmMsg_->szDeviceId);
-		if (pDev) {
-			bool bGuard = (pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD;
-			bool bFlee = (pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE;
-			if (pDev->ulLastFleeAlertTime < pFleeAlarmMsg_->ulMessageTime) {
-				pDev->ulLastFleeAlertTime = pFleeAlarmMsg_->ulMessageTime;
-				pDev->deviceBasic.nBattery = (unsigned char)pFleeAlarmMsg_->usBattery;
-				if (pFleeAlarmMsg_->usMode == 0) {//flee
-					if (bGuard) {
-						changeDeviceStatus(DEV_FLEE, pDev->deviceBasic.nStatus);
-						bLastest = true;
+		DeviceList::iterator iter = g_deviceList.find(pFleeAlarmMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			WristletDevice * pDev = iter->second;
+			if (pDev) {
+				bool bGuard = (pDev->deviceBasic.nStatus & DEV_GUARD) == DEV_GUARD;
+				bool bFlee = (pDev->deviceBasic.nStatus & DEV_FLEE) == DEV_FLEE;
+				if (pDev->ulLastFleeAlertTime < pFleeAlarmMsg_->ulMessageTime) {
+					pDev->ulLastFleeAlertTime = pFleeAlarmMsg_->ulMessageTime;
+					pDev->deviceBasic.nBattery = (unsigned char)pFleeAlarmMsg_->usBattery;
+					if (pFleeAlarmMsg_->usMode == 0) {//flee
+						if (bGuard) {
+							changeDeviceStatus(DEV_FLEE, pDev->deviceBasic.nStatus);
+							bLastest = true;
+						}
+					}
+					else { //guard
+						if (bFlee) {
+							changeDeviceStatus(DEV_GUARD, pDev->deviceBasic.nStatus);
+							bLastest = true;
+						}
 					}
 				}
-				else { //guard
-					if (bFlee) {
-						changeDeviceStatus(DEV_GUARD, pDev->deviceBasic.nStatus);
-						bLastest = true;
-					}
+				bWork = (bGuard || bFlee);
+				if (bWork && strlen(pDev->szBindGuard)) {
+					strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
 				}
-			}
-			bWork = (bGuard || bFlee);
-			if (bWork && strlen(pDev->szBindGuard)) {
-				strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -5111,14 +5450,17 @@ int DbProxy::handleTopicFenceAlarmMsg(TopicAlarmMessageFence * pFenceAlarmMsg_)
 		char szTaskId[20] = { 0 };
 		char szGuarder[20] = { 0 };
 		pthread_mutex_lock(&g_mutex4DevList);
-		WristletDevice * pDevice = (WristletDevice *)zhash_lookup(g_deviceList, pFenceAlarmMsg_->szDeviceId);
-		if (pDevice) {
-			strncpy_s(szGuarder, sizeof(szGuarder), pDevice->szBindGuard, strlen(pDevice->szBindGuard));
-			if (pFenceAlarmMsg_->nMode == 0) {
-				pDevice->nDeviceFenceState = 1;
-			}
-			else {
-				pDevice->nDeviceFenceState = 0;
+		DeviceList::iterator iter = g_deviceList.find(pFenceAlarmMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			WristletDevice * pDevice = iter->second;
+			if (pDevice) {
+				strncpy_s(szGuarder, sizeof(szGuarder), pDevice->szBindGuard, strlen(pDevice->szBindGuard));
+				if (pFenceAlarmMsg_->nMode == 0) {
+					pDevice->nDeviceFenceState = 1;
+				}
+				else {
+					pDevice->nDeviceFenceState = 0;
+				}
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -5291,13 +5633,16 @@ int DbProxy::handleTopicDeviceChargeMsg(TopicDeviceChargeMessage * pDevChargeMsg
 	if (pDevChargeMsg_ && strlen(pDevChargeMsg_->szDeviceId)) {
 		bool bRecord = false;
 		pthread_mutex_lock(&g_mutex4DevList);
-		auto pDevice = (WristletDevice *)zhash_lookup(g_deviceList, pDevChargeMsg_->szDeviceId);
-		if (pDevice) {
-			if (pDevice->nDeviceInCharge != pDevChargeMsg_->nState) {
-				bRecord = true;
+		DeviceList::iterator iter = g_deviceList.find(pDevChargeMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			auto pDevice = iter->second;
+			if (pDevice) {
+				if (pDevice->nDeviceInCharge != pDevChargeMsg_->nState) {
+					bRecord = true;
+				}
+				pDevice->nDeviceInCharge = pDevChargeMsg_->nState;
+				pDevice->deviceBasic.ulLastActiveTime = pDevChargeMsg_->ullMsgTime;
 			}
-			pDevice->nDeviceInCharge = pDevChargeMsg_->nState;
-			pDevice->deviceBasic.ulLastActiveTime = pDevChargeMsg_->ullMsgTime;
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
 		char szSqlDatetime[20] = { 0 };
@@ -5492,15 +5837,18 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 						strncpy_s(szDeviceId, sizeof(szDeviceId), pContainer_->szSqlOptKey, strlen(pContainer_->szSqlOptKey));
 						if (pContainer_->usSqlKeyDesp == escort_db::E_KEY_EQUAL) {
 							pthread_mutex_lock(&g_mutex4DevList);
-							WristletDevice * pDev = (WristletDevice *)zhash_lookup(g_deviceList, szDeviceId);
-							if (pDev) {
-								replyContainer.uiResultCount = 1;
-								replyContainer.uiResultLen = replyContainer.uiResultCount * sizeof(WristletDevice);
-								replyContainer.pStoreResult = (unsigned char *)zmalloc(replyContainer.uiResultLen + 1);
-								memcpy_s(replyContainer.pStoreResult, replyContainer.uiResultLen, pDev,
-									sizeof(WristletDevice));
-								replyContainer.pStoreResult[replyContainer.uiResultLen] = '\0';
-								bHitBuffer = true;
+							DeviceList::iterator iter = g_deviceList.find(szDeviceId);
+							if (iter != g_deviceList.end()) {
+								WristletDevice * pDev = iter->second;
+								if (pDev) {
+									replyContainer.uiResultCount = 1;
+									replyContainer.uiResultLen = replyContainer.uiResultCount * sizeof(WristletDevice);
+									replyContainer.pStoreResult = (unsigned char *)zmalloc(replyContainer.uiResultLen + 1);
+									memcpy_s(replyContainer.pStoreResult, replyContainer.uiResultLen, pDev,
+										sizeof(WristletDevice));
+									replyContainer.pStoreResult[replyContainer.uiResultLen] = '\0';
+									bHitBuffer = true;
+								}
 							}
 							pthread_mutex_unlock(&g_mutex4DevList);
 							if (bHitBuffer) {
@@ -5615,17 +5963,20 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 					}
 					else { //query all device
 						pthread_mutex_lock(&g_mutex4DevList);
-						size_t nCellCount = zhash_size(g_deviceList);
+						size_t nCellCount = g_deviceList.size();
 						size_t nCellSize = sizeof(WristletDevice);
 						size_t nSize = nCellSize * nCellCount;
 						if (nCellCount) {
 							WristletDevice * pDevList = (WristletDevice *)zmalloc(nSize);
-							WristletDevice * pCellDev = (WristletDevice *)zhash_first(g_deviceList);
+							DeviceList::iterator iter = g_deviceList.begin();
 							size_t i = 0;
-							while (pCellDev) {
-								memcpy_s(&pDevList[i], nCellSize, pCellDev, nCellSize);
-								pCellDev = (WristletDevice *)zhash_next(g_deviceList);
-								i++;
+							while (iter != g_deviceList.end()) {
+								WristletDevice * pCellDev = iter->second;
+								if (pCellDev) {
+									memcpy_s(&pDevList[i], nCellSize, pCellDev, nCellSize);
+									i++;
+								}
+								iter++;
 							}
 							replyContainer.uiResultCount = (unsigned int)nCellCount;
 							replyContainer.uiResultLen = (unsigned int)nSize;
@@ -5711,52 +6062,56 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 					char szDeviceId[20] = { 0 };
 					strncpy_s(szDeviceId, sizeof(szDeviceId), pContainer_->szSqlOptKey, strlen(pContainer_->szSqlOptKey));
 					pthread_mutex_lock(&g_mutex4DevList);
-					WristletDevice * pDevice = (WristletDevice *)zhash_lookup(g_deviceList, szDeviceId);
-					if (pDevice) {
-						escort_db::SqlContainer replyContainer;
-						replyContainer.uiResultCount = 1;
-						size_t nDeviceSize = sizeof(WristletDevice);
-						replyContainer.pStoreResult = (unsigned char *)zmalloc(nDeviceSize + 1);
-						replyContainer.uiResultLen = (unsigned int)nDeviceSize;
-						memcpy_s(replyContainer.pStoreResult, nDeviceSize + 1, pDevice, nDeviceSize);
-						replyContainer.pStoreResult[nDeviceSize] = '\0';
-						size_t nContainerSize = sizeof(escort_db::SqlContainer);
-						size_t nFrameDataLen = nContainerSize + replyContainer.uiResultLen;
-						unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
-						memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nContainerSize);
-						memcpy_s(pFrameData + nContainerSize, replyContainer.uiResultLen + 1,
-							replyContainer.pStoreResult, replyContainer.uiResultLen);
-						zmsg_t * msg_reply = zmsg_new();
-						zframe_t * frame_identity = zframe_from(pIdentity_);
-						zframe_t * frame_empty = zframe_new(NULL, 0);
-						zframe_t * frame_reply = zframe_new(pFrameData, nFrameDataLen);
-						zmsg_append(msg_reply, &frame_identity);
-						zmsg_append(msg_reply, &frame_empty);
-						zmsg_append(msg_reply, &frame_reply);
-						zmsg_send(&msg_reply, m_reception);
-						free(pFrameData);
-						pFrameData = NULL;
-						free(replyContainer.pStoreResult);
-						replyContainer.pStoreResult = NULL;
+					DeviceList::iterator iter = g_deviceList.find(szDeviceId);
+					if (iter != g_deviceList.end()) {
+						WristletDevice * pDevice = iter->second;
+						if (pDevice) {
+							escort_db::SqlContainer replyContainer;
+							replyContainer.uiResultCount = 1;
+							size_t nDeviceSize = sizeof(WristletDevice);
+							replyContainer.pStoreResult = (unsigned char *)zmalloc(nDeviceSize + 1);
+							replyContainer.uiResultLen = (unsigned int)nDeviceSize;
+							memcpy_s(replyContainer.pStoreResult, nDeviceSize + 1, pDevice, nDeviceSize);
+							replyContainer.pStoreResult[nDeviceSize] = '\0';
+							size_t nContainerSize = sizeof(escort_db::SqlContainer);
+							size_t nFrameDataLen = nContainerSize + replyContainer.uiResultLen;
+							unsigned char * pFrameData = (unsigned char *)zmalloc(nFrameDataLen + 1);
+							memcpy_s(pFrameData, nFrameDataLen, &replyContainer, nContainerSize);
+							memcpy_s(pFrameData + nContainerSize, replyContainer.uiResultLen + 1,
+								replyContainer.pStoreResult, replyContainer.uiResultLen);
+							zmsg_t * msg_reply = zmsg_new();
+							zframe_t * frame_identity = zframe_from(pIdentity_);
+							zframe_t * frame_empty = zframe_new(NULL, 0);
+							zframe_t * frame_reply = zframe_new(pFrameData, nFrameDataLen);
+							zmsg_append(msg_reply, &frame_identity);
+							zmsg_append(msg_reply, &frame_empty);
+							zmsg_append(msg_reply, &frame_reply);
+							zmsg_send(&msg_reply, m_reception);
+							free(pFrameData);
+							pFrameData = NULL;
+							free(replyContainer.pStoreResult);
+							replyContainer.pStoreResult = NULL;
+						}
+
+						else {
+							escort_db::SqlContainer replyContainer;
+							replyContainer.uiResultCount = 0;
+							replyContainer.uiResultLen = 0;
+							replyContainer.pStoreResult = NULL;
+							replyContainer.usSqlKeyDesp = escort_db::E_KEY_EQUAL;
+							strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey),
+								pContainer_->szSqlOptKey, strlen(pContainer_->szSqlOptKey));
+							zmsg_t * msg_reply = zmsg_new();
+							zframe_t * frame_identity = zframe_from(pIdentity_);
+							zframe_t * frame_empty = zframe_new(NULL, 0);
+							zframe_t * frame_reply = zframe_new(&replyContainer, sizeof(escort_db::SqlContainer));
+							zmsg_append(msg_reply, &frame_identity);
+							zmsg_append(msg_reply, &frame_empty);
+							zmsg_append(msg_reply, &frame_reply);
+							zmsg_send(&msg_reply, m_reception);
+						}
+						g_deviceList.erase(iter);
 					}
-					else {
-						escort_db::SqlContainer replyContainer;
-						replyContainer.uiResultCount = 0;
-						replyContainer.uiResultLen = 0;
-						replyContainer.pStoreResult = NULL;
-						replyContainer.usSqlKeyDesp = escort_db::E_KEY_EQUAL;
-						strncpy_s(replyContainer.szSqlOptKey, sizeof(replyContainer.szSqlOptKey),
-							pContainer_->szSqlOptKey, strlen(pContainer_->szSqlOptKey));
-						zmsg_t * msg_reply = zmsg_new();
-						zframe_t * frame_identity = zframe_from(pIdentity_);
-						zframe_t * frame_empty = zframe_new(NULL, 0);
-						zframe_t * frame_reply = zframe_new(&replyContainer, sizeof(escort_db::SqlContainer));
-						zmsg_append(msg_reply, &frame_identity);
-						zmsg_append(msg_reply, &frame_empty);
-						zmsg_append(msg_reply, &frame_reply);
-						zmsg_send(&msg_reply, m_reception);
-					}
-					zhash_delete(g_deviceList, szDeviceId);
 					pthread_mutex_unlock(&g_mutex4DevList);
 					return;
 				}
@@ -5767,8 +6122,25 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 					size_t nSize = sizeof(WristletDevice);
 					WristletDevice * pDevice = (WristletDevice *)zmalloc(nSize);
 					memcpy_s(pDevice, nSize, pContainer_->pStoreResult, nSize);
-					zhash_update(g_deviceList, szDeviceId, pDevice);
-					zhash_freefn(g_deviceList, szDeviceId, free);
+					DeviceList::iterator iter = g_deviceList.find(szDeviceId);
+					if (iter != g_deviceList.end()) {
+						auto pDev = iter->second;
+						if (pDev) {
+							if (strcmp(pDev->deviceBasic.szFactoryId, pDevice->deviceBasic.szFactoryId) != 0) {
+								strcpy_s(pDev->deviceBasic.szFactoryId, sizeof(pDev->deviceBasic.szFactoryId),
+									pDevice->deviceBasic.szFactoryId);
+							}
+							if (strcmp(pDev->deviceBasic.szOrgId, pDevice->deviceBasic.szOrgId) != 0) {
+								strcpy_s(pDev->deviceBasic.szOrgId, sizeof(pDev->deviceBasic.szOrgId),
+									pDevice->deviceBasic.szOrgId);
+							}
+						}
+						free(pDevice);
+						pDevice = NULL;
+					}
+					else {
+						g_deviceList.emplace(szDeviceId, pDevice);
+					}
 					pthread_mutex_unlock(&g_mutex4DevList);
 				}
 				break;
@@ -6285,8 +6657,7 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 				if (pContainer_->usSqlOptType == escort_db::E_OPT_QUERY) {
 					char szTaskId[16] = { 0 };
 					if (strlen(pContainer_->szSqlOptKey)) {
-						strncpy_s(szTaskId, sizeof(szTaskId), pContainer_->szSqlOptKey,
-							strlen(pContainer_->szSqlOptKey));
+						strcpy_s(szTaskId, sizeof(szTaskId), pContainer_->szSqlOptKey);
 						pthread_mutex_lock(&g_mutex4TaskList);
 						EscortTask * pTask = (EscortTask *)zhash_lookup(g_taskList, szTaskId);
 						if (pTask) {
@@ -6327,10 +6698,10 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 							strncpy_s(pTransaction->szTransactionFrom, sizeof(pTransaction->szTransactionFrom),
 								pIdentity_, strlen(pIdentity_));
 							char szSql[512] = { 0 };
-							snprintf(szSql, sizeof(szSql), "select TaskID, TaskType, LimitDistance, StartTime, "
-								"Destination, UserID as GuarderID, DeviceID, task_info.PersonID, person_info.Perso"
-								"nName, IsOut, Handset from task_info, person_info where TaskState = 0 and "
-								"task_info.PersonID = person_info.PersonID and TaskID='%s';", szTaskId);
+							sprintf_s(szSql, sizeof(szSql), 
+								"select TaskID, TaskType, LimitDistance, StartTime, Destination, UserID, DeviceID, target, IsOut,"
+								" Handset, phone from task_info where TaskState = 0 and TaskId='%s';",
+								szTaskId);
 							size_t nSqlLen = strlen(szSql);
 							pTransaction->uiSqlCount = 1;
 							pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
@@ -6420,10 +6791,9 @@ void DbProxy::handleReception(escort_db::SqlContainer * pContainer_, const char 
 							strncpy_s(pTransaction->szTransactionFrom, sizeof(pTransaction->szTransactionFrom),
 								pIdentity_, strlen(pIdentity_));
 							char szSql[512] = { 0 };
-							snprintf(szSql, sizeof(szSql), "select TaskID, TaskType, LimitDistance, StartTime, "
-								"Destination, UserID as GuarderID, DeviceID, task_info.PersonID, person_info.Perso"
-								"nName, IsOut, Handset from task_info, person_info where TaskState = 0 and "
-								"task_info.PersonID = person_info.PersonID order by TaskID; ");
+							snprintf(szSql, sizeof(szSql), 
+								"select TaskID, TaskType, LimitDistance, StartTime, Destination, UserID, DeviceID, target, "
+								"IsOut, Handset, phone from task_info where TaskState = 0 order by TaskID;");
 							size_t nSqlLen = strlen(szSql);
 							pTransaction->uiSqlCount = 1;
 							pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(pTransaction->uiSqlCount
@@ -7642,29 +8012,32 @@ void DbProxy::updatePipeLoop()
 									device.usOnline = (unsigned short)strtol(row[10], NULL, 10);
 									device.usIsRemove = (unsigned short)strtol(row[11], NULL, 10);
 									strcpy_s(device.szImei, sizeof(device.szImei), row[12] ? row[12] : "");
-									device.nMnc = (int)strtol(row[13], NULL, 10);
-									device.nCoordinate = (int)strtol(row[14], NULL, 10);
+									device.nMnc = (int)strtol(row[13] ? row[13] : "", NULL, 10);
+									device.nCoordinate = (int)strtol(row[14] ? row[14] : "", NULL, 10);
 									if (strlen(device.szDeviceId)) {
-										auto pDevice = (escort::WristletDevice *)zhash_lookup(g_deviceList, device.szDeviceId);
-										if (pDevice) {
-											if (strcmp(pDevice->deviceBasic.szFactoryId, device.szFactoryId) != 0) {
-												strcpy_s(pDevice->deviceBasic.szFactoryId, sizeof(pDevice->deviceBasic.szFactoryId),
-													device.szFactoryId);
+										DeviceList::iterator iter = g_deviceList.find(device.szDeviceId);
+										if (iter != g_deviceList.end()) {
+											auto pDevice = iter->second;
+											if (pDevice) {
+												if (strcmp(pDevice->deviceBasic.szFactoryId, device.szFactoryId) != 0) {
+													strcpy_s(pDevice->deviceBasic.szFactoryId, sizeof(pDevice->deviceBasic.szFactoryId),
+														device.szFactoryId);
+												}
+												if (strcmp(pDevice->deviceBasic.szOrgId, device.szOrgId) != 0) {
+													strcpy_s(pDevice->deviceBasic.szOrgId, sizeof(pDevice->deviceBasic.szOrgId), device.szOrgId);
+												}
+												char szCell[256] = { 0 };
+												sprintf_s(szCell, sizeof(szCell), "{\"deviceId\":\"%s\",\"factory\":\"%s\",\"org\":\"%s\",\"battery\":%d,"
+													"\"online\":%d,\"loose\":%d}",
+													pDevice->deviceBasic.szDeviceId, pDevice->deviceBasic.szFactoryId, pDevice->deviceBasic.szOrgId,
+													device.usBattery, device.usOnline, device.usIsRemove);
+												if (strDevList.empty()) {
+													strDevList = szCell;
+												}
+												else {
+													strDevList = strDevList + "," + szCell;
+												}
 											}
-											if (strcmp(pDevice->deviceBasic.szOrgId, device.szOrgId) != 0) {
-												strcpy_s(pDevice->deviceBasic.szOrgId, sizeof(pDevice->deviceBasic.szOrgId), device.szOrgId);
-											}										
-											char szCell[256] = { 0 };
-											sprintf_s(szCell, sizeof(szCell), "{\"deviceId\":\"%s\",\"factory\":\"%s\",\"org\":\"%s\",\"battery\":%d,"
-												"\"online\":%d,\"loose\":%d}",
-												pDevice->deviceBasic.szDeviceId, pDevice->deviceBasic.szFactoryId, pDevice->deviceBasic.szOrgId, 
-												device.usBattery, device.usOnline, device.usIsRemove);
-											if (strDevList.empty()) {
-												strDevList = szCell;
-											} 
-											else {
-												strDevList = strDevList + "," + szCell;
-											}										
 										}
 										else {
 											size_t nDeviceSize = sizeof(escort::WristletDevice);
@@ -7678,8 +8051,7 @@ void DbProxy::updatePipeLoop()
 											pDevice->deviceBasic.nOnline = device.usOnline;
 											pDevice->deviceBasic.nLooseStatus = device.usIsRemove;
 											pDevice->deviceBasic.nDeviceMnc = device.nMnc;
-											zhash_update(g_deviceList, device.szDeviceId, pDevice);
-											zhash_freefn(g_deviceList, device.szDeviceId, free);
+											g_deviceList.emplace(device.szDeviceId, pDevice);
 											char szCell[256] = { 0 };
 											sprintf_s(szCell, sizeof(szCell), "{\"deviceId\":\"%s\",\"factory\":\"%s\",\"org\":\"%s\",\"battery\":%d,"
 												"\"online\":%d,\"loose\":%d}", pDevice->deviceBasic.szDeviceId, pDevice->deviceBasic.szFactoryId, 
@@ -7748,11 +8120,11 @@ void DbProxy::updatePipeLoop()
 								MYSQL_ROW row;
 								while (row = mysql_fetch_row(res_ptr)) {
 									escort_db::SqlFence fence;
-									fence.nFenceId = (int)strtol(row[0], NULL, 10);
-									fence.usFenceType = (unsigned short)strtol(row[1], NULL, 10);
-									strcpy_s(fence.szFenceContent, sizeof(fence.szFenceContent), row[2]);
-									fence.nFenceActive = (int)strtol(row[3], NULL, 10);
-									fence.nCoordinate = (int)strtol(row[4], NULL, 10);
+									fence.nFenceId = (int)strtol(row[0] ? row[0] : "", NULL, 10);
+									fence.usFenceType = (unsigned short)strtol(row[1] ? row[1] : "", NULL, 10);
+									strcpy_s(fence.szFenceContent, sizeof(fence.szFenceContent), row[2] ? row[2] : "");
+									fence.nFenceActive = (int)strtol(row[3] ? row[3] : "", NULL, 10);
+									fence.nCoordinate = (int)strtol(row[4] ? row[4] : "", NULL, 10);
 									char szFenceId[16] = { 0 };
 									sprintf_s(szFenceId, sizeof(szFenceId), "%d", fence.nFenceId);
 									auto pFence = (escort::EscortFence *)zhash_lookup(g_fenceList, szFenceId);
@@ -7844,7 +8216,7 @@ void DbProxy::updatePipeLoop()
 
 					char szTaskSql[256] = { 0 };
 					sprintf_s(szTaskSql, sizeof(szTaskSql), "select taskId, personId, EndTime, TaskState "
-						"from task_info where TaskState != 0 and EndTime is not null and EndTime >= '%s';", 
+						"from task_info where TaskState > 2 and EndTime is not null and EndTime >= '%s';", 
 						szLastUpdateTime);
 					nErr = mysql_real_query(m_updateConn, szTaskSql, (unsigned long)strlen(szTaskSql));
 					if (nErr == 0) {
@@ -8043,13 +8415,16 @@ void DbProxy::closeTaskFromSql(const char * pTaskId, const char * pPersonId, con
 		}
 		if (strlen(szDeviceId)) {
 			pthread_mutex_lock(&g_mutex4DevList);
-			auto pDevice = (escort::WristletDevice *)zhash_lookup(g_deviceList, szDeviceId);
-			if (pDevice) {
-				pDevice->deviceBasic.nStatus = DEV_NORMAL;
-				if (pDevice->deviceBasic.nLooseStatus == 1) {
-					pDevice->deviceBasic.nStatus += DEV_LOOSE;
+			DeviceList::iterator iter = g_deviceList.find(szDeviceId);
+			if (iter != g_deviceList.end()) {
+				auto pDevice = iter->second;
+				if (pDevice) {
+					pDevice->deviceBasic.nStatus = DEV_NORMAL;
+					if (pDevice->deviceBasic.nLooseStatus == 1) {
+						pDevice->deviceBasic.nStatus += DEV_LOOSE;
+					}
+					pDevice->szBindGuard[0] = '\0';
 				}
-				pDevice->szBindGuard[0] = '\0';
 			}
 			pthread_mutex_unlock(&g_mutex4DevList);
 		}
@@ -8061,30 +8436,38 @@ void DbProxy::closeTaskFromSql(const char * pTaskId, const char * pPersonId, con
 			}
 			pthread_mutex_unlock(&g_mutex4PersonList);
 		}
+		char szTaskSql[256] = { 0 };
+		sprintf_s(szTaskSql, sizeof(szTaskSql), "update task_info set taskState=1 where TaskId='%s';", pTaskId);
+		char szTaskExtraSql[256] = { 0 };
 		if (strlen(szHandset)) {
-			char szTaskExtraSql[256] = { 0 };
 			sprintf_s(szTaskExtraSql, sizeof(szTaskExtraSql), "update task_extra_info set StopTime='%s' "
 				"where taskId='%s' and handset='%s';", pEndTime, pTaskId, szHandset);
-			size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
-			dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
-			pTransaction->uiSqlCount = 1;
-			pTransaction->uiTransactionSequence = getNextInteractSequence();
-			pTransaction->ulTransactionTime = (unsigned long long)time(NULL);
-			pTransaction->szTransactionFrom[0] = '\0';
-			pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(sizeof(dbproxy::SqlStatement));
-			pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_TASK_EXTRA;
-			unsigned int uiLen = (unsigned int)strlen(szTaskExtraSql);
-			pTransaction->pSqlList[0].uiStatementLen = uiLen;
-			pTransaction->pSqlList[0].pStatement = (char *)zmalloc(uiLen + 1);
-			strcpy_s(pTransaction->pSqlList[0].pStatement, uiLen + 1, szTaskExtraSql);
-			pTransaction->pSqlList[0].pStatement[uiLen] = '\0';
-			if (!addSqlTransaction(pTransaction, SQLTYPE_EXECUTE)) {
-				free(pTransaction->pSqlList);
-				pTransaction->pSqlList = NULL;
-				free(pTransaction);
-				pTransaction = NULL;
-			}
 		}
+		size_t nTransactionSize = sizeof(dbproxy::SqlTransaction);
+		dbproxy::SqlTransaction * pTransaction = (dbproxy::SqlTransaction *)zmalloc(nTransactionSize);
+		pTransaction->uiSqlCount = strlen(szTaskExtraSql) ? 2 : 1;
+		pTransaction->uiTransactionSequence = getNextInteractSequence();
+		pTransaction->ulTransactionTime = (unsigned long long)time(NULL);
+		pTransaction->szTransactionFrom[0] = '\0';
+		size_t nSqlSize = sizeof(dbproxy::SqlStatement) * pTransaction->uiSqlCount;
+		pTransaction->pSqlList = (dbproxy::SqlStatement *)zmalloc(nSqlSize);
+		pTransaction->pSqlList[0].uiCorrelativeTable = escort_db::E_TBL_TASK;
+		unsigned int uiLen1 = (unsigned int)strlen(szTaskSql);
+		pTransaction->pSqlList[0].pStatement = (char *)zmalloc(uiLen1 + 1);
+		strcpy_s(pTransaction->pSqlList[0].pStatement, uiLen1 + 1, szTaskSql);
+		pTransaction->pSqlList[0].pStatement[uiLen1] = '\0';
+		if (strlen(szTaskExtraSql)) {
+			unsigned int uiLen2 = (unsigned int)strlen(szTaskExtraSql);
+			pTransaction->pSqlList[1].uiStatementLen = uiLen2;
+			pTransaction->pSqlList[1].pStatement = (char *)zmalloc(uiLen2 + 1);
+			strcpy_s(pTransaction->pSqlList[1].pStatement, uiLen2 + 1, szTaskExtraSql);
+		}
+		if (!addSqlTransaction(pTransaction, SQLTYPE_EXECUTE)) {
+			free(pTransaction->pSqlList);
+			pTransaction->pSqlList = NULL;
+			free(pTransaction);
+			pTransaction = NULL;
+		}									
 	}
 }
 

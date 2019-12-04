@@ -17,6 +17,8 @@
 #include "pf_log.h"
 #include "document.h" //rapidjson
 #include "EscortDbCommon.h"
+#include <string>
+#include <map>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "libmysql.lib")
@@ -179,7 +181,9 @@ private:
 	pthread_t m_pthdLocate;
 
 	//buffer
-	static zhash_t * g_deviceList;
+	//static zhash_t * g_deviceList;
+	typedef std::map<std::string, escort::WristletDevice *> DeviceList;
+	static DeviceList g_deviceList;
 	static zhash_t * g_guarderList;
 	static zhash_t * g_taskList;
 	static zhash_t * g_personList;
