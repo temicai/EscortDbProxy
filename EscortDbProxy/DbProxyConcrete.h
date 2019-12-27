@@ -256,8 +256,8 @@ protected:
 	int handleTopicDeviceOnlineMsg(TopicOnlineMessage *);
 	int handleTopicDeviceOfflineMsg(TopicOfflineMessage *);
 	int handleTopicBindMsg(TopicBindMessage *);
-	int handleTopicTaskSubmitMsg(TopicTaskMessage *);
-	int handleTopicTaskCloseMsg(TopicTaskCloseMessage *);
+	int handleTopicTaskSubmitMsg(TopicTaskMessage *, const char * pMsgSource);
+	int handleTopicTaskCloseMsg(TopicTaskCloseMessage *, const char * pMsgSource);
 	int handleTopicTaskModifyMsg(TopicTaskModifyMessage *);
 	int handleTopicGpsLocateMsg(TopicLocateMessageGps *);
 	int handleTopicLbsLocateMsg(TopicLocateMessageLbs *);
