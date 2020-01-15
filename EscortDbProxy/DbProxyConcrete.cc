@@ -352,7 +352,7 @@ int DbProxy::Start(const char * pHost_, unsigned short usReceptPort_, const char
 			m_nRun = 1;
 			m_nTimerTickCount = 0;
 			m_loop = zloop_new();
-			m_nTimer4Supervise = zloop_timer(m_loop, 1000, 0, supervise, this);
+			m_nTimer4Supervise = zloop_timer(m_loop, 1000, 0, timerCb, this);
 			zloop_reader(m_loop, m_subscriber, readSubscriber, this);
 			zloop_reader_set_tolerant(m_loop, m_subscriber);
 			zloop_reader(m_loop, m_interactor, readInteractor, this);
@@ -731,7 +731,7 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 	if (m_readConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->uiStatementLen) {
 		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%llu, execute query sql: %s\n",
 			__FUNCTION__, __LINE__, uiQrySeq_, ulQryTime_, pSqlStatement_->pStatement);
-		LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+		//LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 		int nErr = mysql_real_query(m_readConn, pSqlStatement_->pStatement, pSqlStatement_->uiStatementLen);
 		if (nErr == 0) {
 			MYSQL_RES * res_ptr = mysql_store_result(m_readConn);
@@ -752,12 +752,10 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							strncpy_s(pSqlDevList[i].szFactoryId, sizeof(pSqlDevList[i].szFactoryId), row[1], strlen(row[1]));
 							strncpy_s(pSqlDevList[i].szOrgId, sizeof(pSqlDevList[i].szOrgId), row[2], strlen(row[2]));
 							if (row[3] && strlen(row[3])) {
-								strncpy_s(pSqlDevList[i].szLastCommuncation, sizeof(pSqlDevList[i].szLastCommuncation),
-									row[3], strlen(row[3]));
+								strcpy_s(pSqlDevList[i].szLastCommuncation, sizeof(pSqlDevList[i].szLastCommuncation), row[3]);
 							}
 							if (row[4] && strlen(row[4])) {
-								strncpy_s(pSqlDevList[i].szLastLocation, sizeof(pSqlDevList[i].szLastLocation), row[4],
-									strlen(row[4]));
+								strcpy_s(pSqlDevList[i].szLastLocation, sizeof(pSqlDevList[i].szLastLocation), row[4]);
 							}
 							if (row[5]) {
 								pSqlDevList[i].dLat = atof(row[5]);
@@ -806,12 +804,9 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							if (pDev->deviceBasic.nBattery < BATTERY_THRESHOLD) {
 								pDev->deviceBasic.nStatus += DEV_LOWPOWER;
 							}
-							strncpy_s(pDev->deviceBasic.szDeviceId, sizeof(pDev->deviceBasic.szDeviceId),
-								pSqlDevList[i].szDeviceId, strlen(pSqlDevList[i].szDeviceId));
-							strncpy_s(pDev->deviceBasic.szFactoryId, sizeof(pDev->deviceBasic.szFactoryId),
-								pSqlDevList[i].szFactoryId, strlen(pSqlDevList[i].szFactoryId));
-							strncpy_s(pDev->deviceBasic.szOrgId, sizeof(pDev->deviceBasic.szOrgId), 
-								pSqlDevList[i].szOrgId, strlen(pSqlDevList[i].szOrgId));
+							strcpy_s(pDev->deviceBasic.szDeviceId, sizeof(pDev->deviceBasic.szDeviceId), pSqlDevList[i].szDeviceId);
+							strcpy_s(pDev->deviceBasic.szFactoryId, sizeof(pDev->deviceBasic.szFactoryId), pSqlDevList[i].szFactoryId);
+							strcpy_s(pDev->deviceBasic.szOrgId, sizeof(pDev->deviceBasic.szOrgId), pSqlDevList[i].szOrgId);
 							if (pSqlDevList[i].nLocationType == escort_db::E_LOCATE_APP) {
 								pDev->guardPosition.dLatitude = pSqlDevList[i].dLat;
 								pDev->guardPosition.dLngitude = pSqlDevList[i].dLng;
@@ -837,8 +832,7 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							else {
 								pDev->deviceBasic.nOnline = 0;
 							}
-							strncpy_s(pDev->deviceBasic.szDeviceImei, sizeof(pDev->deviceBasic.szDeviceImei), pSqlDevList[i].szImei,
-								strlen(pSqlDevList[i].szImei));
+							strcpy_s(pDev->deviceBasic.szDeviceImei, sizeof(pDev->deviceBasic.szDeviceImei), pSqlDevList[i].szImei);
 							pDev->deviceBasic.nDeviceMnc = pSqlDevList[i].nMnc;
 							pDev->nDeviceInCharge = pSqlDevList[i].nCharge;
 							memcpy_s(&pDevList[i], nDeviceSize, pDev, nDeviceSize);
@@ -1152,8 +1146,7 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 						}
 					}
 					else if (pSqlStatement_->uiCorrelativeTable == escort_db::E_TBL_FENCE) {
-						escort_db::SqlFence * pSqlFenceList = (escort_db::SqlFence *)zmalloc(sizeof(escort_db::SqlFence)
-							* nCount);
+						auto pSqlFenceList = (escort_db::SqlFence *)zmalloc(sizeof(escort_db::SqlFence) * nCount);
 						size_t nFenceSize = sizeof(EscortFence);
 						EscortFence * pFenceList = (EscortFence *)zmalloc(nFenceSize * nCount);
 						int i = 0; 
@@ -1165,8 +1158,7 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 								pSqlFenceList[i].usFenceType = (unsigned short)atoi(row[1]);
 							}
 							if (row[2] && strlen(row[2])) {
-								strncpy_s(pSqlFenceList[i].szFenceContent, sizeof(pSqlFenceList[i].szFenceContent),
-									row[2], strlen(row[2]));
+								strcpy_s(pSqlFenceList[i].szFenceContent, sizeof(pSqlFenceList[i].szFenceContent), row[2]);
 							}
 							if (row[3]) {
 								pSqlFenceList[i].nFenceActive = (uint8_t)atoi(row[3]);
@@ -1180,8 +1172,7 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 							pFence->nFenceType = pSqlFenceList[i].usFenceType;
 							pFence->nActiveFlag = pSqlFenceList[i].nFenceActive;
 							pFence->nCoordinate = pSqlFenceList[i].nCoordinate;
-							strncpy_s(pFence->szFenceContent, sizeof(pFence->szFenceContent), 
-								pSqlFenceList[i].szFenceContent, strlen(pSqlFenceList[i].szFenceContent));
+							strcpy_s(pFence->szFenceContent, sizeof(pFence->szFenceContent), pSqlFenceList[i].szFenceContent);
 
 							memcpy_s(&pFenceList[i], nFenceSize, pFence, nFenceSize);
 
@@ -1214,30 +1205,29 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 						escort_db::SqlFenceTask * pSqlFenceTaskList = (escort_db::SqlFenceTask *)zmalloc(
 							sizeof(escort_db::SqlFenceTask) * nCount);
 						size_t nFenceTaskSize = sizeof(EscortFenceTask);
-						EscortFenceTask * pFenceTaskList = (EscortFenceTask *)zmalloc(nFenceTaskSize * nCount);
+						std::vector<escort::EscortFenceTask *> vftList; //valid 
+						std::vector<escort::EscortFenceTask *> eftList; //expired 
+						EscortFenceTask * pFenceTaskList = NULL; // (EscortFenceTask *)zmalloc(nFenceTaskSize * nCount);
 						int i = 0;
+						unsigned long long now = time(NULL);
 						while (row = mysql_fetch_row(res_ptr)) {
 							if (row[0]) {
-								pSqlFenceTaskList[i].nFenceTaskId = atoi(row[0]);
+								pSqlFenceTaskList[i].nFenceTaskId = (int)strtol(row[0], NULL, 10);
 							}
 							if (row[1]) {
 								pSqlFenceTaskList[i].nFenceId = atoi(row[1]);
 							}
 							if (row[2] && strlen(row[2])) { //factoryId
-								strncpy_s(pSqlFenceTaskList[i].szFactoryId, sizeof(pSqlFenceTaskList[i].szFactoryId),
-									row[2], strlen(row[2]));
+								strcpy_s(pSqlFenceTaskList[i].szFactoryId, sizeof(pSqlFenceTaskList[i].szFactoryId), row[2]);
 							}
 							if (row[3] && strlen(row[3])) { //deviceId
-								strncpy_s(pSqlFenceTaskList[i].szDeviceId, sizeof(pSqlFenceTaskList[i].szDeviceId),
-									row[3], strlen(row[3]));
+								strcpy_s(pSqlFenceTaskList[i].szDeviceId, sizeof(pSqlFenceTaskList[i].szDeviceId), row[3]);
 							}
 							if (row[4] && strlen(row[4])) { //startTime
-								strncpy_s(pSqlFenceTaskList[i].szTaskStartTime, sizeof(pSqlFenceTaskList[i].szTaskStartTime),
-									row[4], strlen(row[4]));
+								strcpy_s(pSqlFenceTaskList[i].szTaskStartTime, sizeof(pSqlFenceTaskList[i].szTaskStartTime), row[4]);
 							}
 							if (row[5] && strlen(row[5])) { //stopTime
-								strncpy_s(pSqlFenceTaskList[i].szTaskStopTime, sizeof(pSqlFenceTaskList[i].szTaskStopTime),
-									row[5], strlen(row[5]));
+								strcpy_s(pSqlFenceTaskList[i].szTaskStopTime, sizeof(pSqlFenceTaskList[i].szTaskStopTime), row[5]);
 							}
 							if (row[6] && strlen(row[6])) {
 								pSqlFenceTaskList[i].nFencePolicy = (int8_t)atoi(row[6]);
@@ -1254,41 +1244,106 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 								pSqlFenceTaskList[i].szFactoryId, strlen(pSqlFenceTaskList[i].szFactoryId));
 							strncpy_s(pFenceTask->szDeviceId, sizeof(pFenceTask->szDeviceId),
 								pSqlFenceTaskList[i].szDeviceId, strlen(pSqlFenceTaskList[i].szDeviceId));
-							unsigned long long ulStartTime = sqldatetime2time(pSqlFenceTaskList[i].szTaskStartTime);
-							format_datetime(ulStartTime, pFenceTask->szStartTime, sizeof(pFenceTask->szStartTime));
-							unsigned long long ulStopTime = sqldatetime2time(pSqlFenceTaskList[i].szTaskStopTime);
-							format_datetime(ulStopTime, pFenceTask->szStopTime, sizeof(pFenceTask->szStopTime));
+							unsigned long long ullStartTime = sqldatetime2time(pSqlFenceTaskList[i].szTaskStartTime);
+							unsigned long long ullStopTime = sqldatetime2time(pSqlFenceTaskList[i].szTaskStopTime);
+							format_datetime(ullStartTime, pFenceTask->szStartTime, sizeof(pFenceTask->szStartTime));							
+							format_datetime(ullStopTime, pFenceTask->szStopTime, sizeof(pFenceTask->szStopTime));
 							pFenceTask->nFencePolicy = pSqlFenceTaskList[i].nFencePolicy;
 							pFenceTask->nPeerCheck = pSqlFenceTaskList[i].nPeerCheck;
 							pFenceTask->nTaskState = pSqlFenceTaskList[i].nTaskState;
-
-							memcpy_s(&pFenceTaskList[i], nFenceTaskSize, pFenceTask, nFenceTaskSize);
-
-							pthread_mutex_lock(&g_mutex4FenceTaskList);
-							zhash_update(g_fenceTaskList, pFenceTask->szFenceTaskId, pFenceTask);
-							zhash_freefn(g_fenceTaskList, pFenceTask->szFenceTaskId, free);
-							pthread_mutex_unlock(&g_mutex4FenceTaskList);
-
-							pthread_mutex_lock(&g_mutex4DevList);
-							if (!g_deviceList.empty()) {
-								DeviceList::iterator iter = g_deviceList.find(pFenceTask->szDeviceId);
-								if (iter != g_deviceList.end()) {
-									WristletDevice * pDevice = iter->second;
-									if (pDevice) {
-										pDevice->nDeviceHasFence = 1;
+							if (ullStopTime > now) {
+								vftList.emplace_back(pFenceTask);
+							}
+							else {
+								eftList.emplace_back(pFenceTask);
+							}
+							i++;
+						}
+						if (!vftList.empty()) {
+							pFenceTaskList = (EscortFenceTask *)malloc(nFenceTaskSize * vftList.size());
+							std::vector<escort::EscortFenceTask *>::iterator iter = vftList.begin();
+							size_t i = 0;
+							while (iter != vftList.end()) {
+								auto pFt = (EscortFenceTask *)*iter;
+								if (pFt) {
+									memcpy_s(&pFenceTaskList[i], nFenceTaskSize, pFt, nFenceTaskSize);
+									pthread_mutex_lock(&g_mutex4FenceTaskList);
+									zhash_update(g_fenceTaskList, pFt->szFenceTaskId, pFt);
+									zhash_freefn(g_fenceTaskList, pFt->szFenceTaskId, free);
+									pthread_mutex_unlock(&g_mutex4FenceTaskList);
+									pthread_mutex_lock(&g_mutex4DevList);
+									if (!g_deviceList.empty()) {
+										DeviceList::iterator it = g_deviceList.find(pFt->szDeviceId);
+										if (it != g_deviceList.end()) {
+											WristletDevice * pDevice = it->second;
+											if (pDevice) {
+												if (pDevice->nDeviceHasFence <= 0) {
+													pDevice->nDeviceHasFence = 1;
+												}
+												else {
+													pDevice->nDeviceHasFence++;
+												}
+											}
+										}
 									}
+									pthread_mutex_unlock(&g_mutex4DevList);
+									sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%u]load fenceTaskId=%s, fenceId=%s, deviceId=%s, state=%d, "
+										"policy=%d, startTime=%s, stopTime=%s, peerCheck=%d\n", __FUNCTION__, __LINE__, pFt->szFenceTaskId,
+										pFt->szFenceId, pFt->szDeviceId, pFt->nTaskState, pFt->nFencePolicy, pFt->szStartTime,
+										pFt->szStopTime, pFt->nPeerCheck);
+									LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+								}
+								iter = vftList.erase(iter);
+								i++;
+							}
+							vftList.clear();
+						}
+						if (!eftList.empty()) {
+							auto pTran = (dbproxy::SqlTransaction *)malloc(sizeof(dbproxy::SqlTransaction));
+							pTran->szTransactionFrom[0] = '\0';
+							pTran->uiTransactionSequence = getNextInteractSequence();
+							pTran->ulTransactionTime = now;
+							pTran->uiSqlCount = (unsigned int)eftList.size();
+							pTran->pSqlList = (dbproxy::SqlStatement *)malloc(pTran->uiSqlCount * sizeof(dbproxy::SqlStatement));
+							size_t i = 0;
+							std::vector<escort::EscortFenceTask *>::iterator iter = eftList.begin();
+							while (iter != eftList.end()) {
+								auto pFt = (EscortFenceTask *)*iter;
+								if (pFt) {
+									int nFt = (int)strtol(pFt->szFenceTaskId, NULL, 10);
+									char szSql[512] = { 0 };
+									sprintf_s(szSql, sizeof(szSql), "update fence_task_info set taskState=1 where fenceTaskId=%d;", nFt);
+									unsigned int uiLen = (unsigned int)strlen(szSql);
+									pTran->pSqlList[i].uiStatementLen = uiLen;
+									pTran->pSqlList[i].pStatement = (char *)malloc(uiLen + 1);
+									strcpy_s(pTran->pSqlList[i].pStatement, uiLen + 1, szSql);
+									pTran->pSqlList[i].pStatement[uiLen] = '\0';
+									pTran->pSqlList[i].uiCorrelativeTable = escort_db::E_TBL_TASK_FENCE;
+									free(pFt);
+									pFt = NULL;
+									i++;
+								}
+								iter = eftList.erase(iter);
+							}
+							eftList.clear();
+							if (!addSqlTransaction(pTran, SQLTYPE_EXECUTE)) {
+								if (pTran) {
+									if (pTran->uiSqlCount && pTran->pSqlList) {
+										for (unsigned int j = 0; j < pTran->uiSqlCount; j++) {
+											if (pTran->pSqlList[j].uiStatementLen && pTran->pSqlList[j].pStatement) {
+												free(pTran->pSqlList[j].pStatement);
+												pTran->pSqlList[j].pStatement = NULL;
+												pTran->pSqlList[j].uiStatementLen = 0;
+											}
+										}
+										free(pTran->pSqlList);
+										pTran->pSqlList = NULL;
+										pTran->uiSqlCount = 0;
+									}
+									free(pTran);
+									pTran = NULL;
 								}
 							}
-							pthread_mutex_unlock(&g_mutex4DevList);
-
-							sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]load fenceTaskId=%s, fenceId=%s, deviceId=%s, "
-								"factoryId=%s, state=%d, policy=%d, startTime=%s, stopTime=%s, peerCheck=%d\n", __FUNCTION__,
-								__LINE__, pFenceTask->szFenceTaskId, pFenceTask->szFenceId, pFenceTask->szFactoryId, 
-								pFenceTask->szDeviceId, pFenceTask->nTaskState, pFenceTask->nFencePolicy, pFenceTask->szStartTime,
-								pFenceTask->szStopTime, pFenceTask->nPeerCheck);
-							LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-
-							i++;
 						}
 						if (pQryFrom_ && strlen(pQryFrom_)) {
 							replyQuery(pFenceTaskList, (unsigned int)nCount, pSqlStatement_->uiCorrelativeTable, uiQrySeq_,
@@ -1308,9 +1363,9 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 					if (pQryFrom_ && strlen(pQryFrom_)) {
 						replyQuery(NULL, 0, pSqlStatement_->uiCorrelativeTable, uiQrySeq_, ulQryTime_, pQryFrom_);
 					}
-					snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]query row is empty, seq=%u, time=%llu, from=%s"
-						", sql=%s\r\n", __FUNCTION__, __LINE__, uiQrySeq_, ulQryTime_,
-						pQryFrom_ ? pQryFrom_ : "", pSqlStatement_->pStatement);
+					snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]query row is empty, seq=%u, time=%llu, from=%s, "
+						"sql=%s\n", __FUNCTION__, __LINE__, uiQrySeq_, ulQryTime_, pQryFrom_ ? pQryFrom_ : "", 
+						pSqlStatement_->pStatement);
 					LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 				}
 				mysql_free_result(res_ptr);
@@ -1329,17 +1384,30 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 			if (pQryFrom_ && strlen(pQryFrom_)) {
 				replyQuery(NULL, 0, pSqlStatement_->uiCorrelativeTable, uiQrySeq_, ulQryTime_, pQryFrom_);
 			}
-			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]query error=%u,%s, seq=%u, time=%llu, from=%s, sql="
-				"%s\r\n", __FUNCTION__, __LINE__, mysql_errno(m_readConn), mysql_error(m_readConn), uiQrySeq_, 
-				ulQryTime_, pQryFrom_ ? pQryFrom_ : "", pSqlStatement_->pStatement);
+			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]query error=%u, %s, seq=%u, time=%llu, from=%s, sql=%s\n",
+				__FUNCTION__, __LINE__, mysql_errno(m_readConn), mysql_error(m_readConn), uiQrySeq_, ulQryTime_, 
+				pQryFrom_ ? pQryFrom_ : "", pSqlStatement_->pStatement);
 			LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
+			nErr = mysql_errno(m_readConn);
+			if (nErr == 2006 || nErr == 2013) {
+				mysql_close(m_readConn);
+				m_readConn = mysql_init(NULL);
+				if (m_readConn && mysql_real_connect(m_readConn, m_zkDbProxy.szSlaveDbHostIp, m_zkDbProxy.szSlaveDbUser,
+					m_zkDbProxy.szSlaveDbPasswd, m_zkDbProxy.szMajorSample, m_zkDbProxy.usSlaveDbPort, NULL, 0)) {
+					mysql_set_character_set(m_readConn, "gb2312");
+					snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]re-connect locate db %s, ip=%s, port=%hu, user=%s at %llu\r\n",
+						__FUNCTION__, __LINE__, m_zkDbProxy.szMajorSample, m_zkDbProxy.szSlaveDbHostIp, m_zkDbProxy.usSlaveDbPort,
+						m_zkDbProxy.szSlaveDbUser, (unsigned long long)time(NULL));
+					LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
+				}
+			}
 		}
 	}
 	else { //conn error
 		if (pQryFrom_ && strlen(pQryFrom_)) {
 			replyQuery(NULL, 0, pSqlStatement_->uiCorrelativeTable, uiQrySeq_, ulQryTime_, pQryFrom_);
 		}
-		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]conn error, seq=%u, time=%llu, from=%s, sql=%s\r\n",
+		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]conn error, seq=%u, time=%llu, from=%s, sql=%s\n",
 			__FUNCTION__, __LINE__, uiQrySeq_, ulQryTime_, pQryFrom_ ? pQryFrom_ : "", 
 			(pSqlStatement_ && pSqlStatement_->pStatement) ? pSqlStatement_->pStatement : "");
 		LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
@@ -1353,22 +1421,19 @@ void DbProxy::handleSqlExec(dbproxy::SqlStatement * pSqlStatement_, unsigned int
 	char szLog[1024] = { 0 };
 	pthread_mutex_lock(&m_mutex4WriteConn);
 	if (m_writeConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->uiStatementLen) {
-		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%llu, execute sql=%s\n",
-			__FUNCTION__, __LINE__, uiExecSeq_, ulExecTime_, pSqlStatement_->pStatement);
-		//LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-		printf(szLog);
 		int nErr = mysql_real_query(m_writeConn, pSqlStatement_->pStatement, pSqlStatement_->uiStatementLen);
 		if (nErr == 0) {
 			my_ulonglong nAffectedRow = mysql_affected_rows(m_writeConn);
 			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute sql affected=%d, seq=%u, time=%llu, from=%s,"
-				"sql=%s\n", __FUNCTION__, __LINE__, (int)nAffectedRow, uiExecSeq_, ulExecTime_,
+				"sql=%s\n", __FUNCTION__, __LINE__, (int)nAffectedRow, uiExecSeq_, ulExecTime_,+
 				pExecFrom_ ? pExecFrom_ : "", pSqlStatement_->pStatement);
 			LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 		}
 		else {
 			//need backup
+			nErr = mysql_errno(m_writeConn);
 			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute sql error=%d, %s, seq=%u, time=%llu, from=%s, "
-				"sql=%s\n", __FUNCTION__, __LINE__, mysql_errno(m_writeConn), mysql_error(m_writeConn), uiExecSeq_, 
+				"sql=%s\n", __FUNCTION__, __LINE__, nErr, mysql_error(m_writeConn), uiExecSeq_, 
 				ulExecTime_, pExecFrom_ ? pExecFrom_ : "", pSqlStatement_->pStatement);
 			LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 			if (nErr == 2006 || nErr == 2013) {
@@ -1395,10 +1460,10 @@ void DbProxy::handleSqlExec(dbproxy::SqlStatement * pSqlStatement_, unsigned int
 					mysql_set_character_set(m_writeConn, "gb2312");
 					break;
 				}
+				nErr2 = mysql_errno(m_writeConn);
 				snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]retry=%d, execute sql error=%d, %s, seq=%u, time=%llu, "
-					"from=%s, sql=%s\r\n", __FUNCTION__, __LINE__, nRetryTime, mysql_errno(m_writeConn), 
-					mysql_error(m_writeConn), uiExecSeq_, ulExecTime_, pExecFrom_ ? pExecFrom_ : "", 
-					pSqlStatement_->pStatement);
+					"from=%s, sql=%s\n", __FUNCTION__, __LINE__, nRetryTime, nErr2, mysql_error(m_writeConn), uiExecSeq_,
+					ulExecTime_, pExecFrom_ ? pExecFrom_ : "", pSqlStatement_->pStatement);
 				LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 				nRetryTime--;
 				Sleep(200);
@@ -1420,24 +1485,24 @@ void DbProxy::handleSqlLocate(dbproxy::SqlStatement * pSqlStatement_, unsigned i
 	char szLog[512] = { 0 };
 	pthread_mutex_lock(&m_mutex4LocateConn);
 	if (m_locateConn && pSqlStatement_ && pSqlStatement_->pStatement && pSqlStatement_->uiStatementLen) {
-		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%llu, execute locate sql=%s\r\n",
+		snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]seq=%u, time=%llu, execute locate sql=%s\n",
 			__FUNCTION__, __LINE__, uiLocateSeq_, ulLocateTime_, pSqlStatement_->pStatement);
 		//LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 		printf(szLog);
 		int nErr = mysql_real_query(m_locateConn, pSqlStatement_->pStatement, pSqlStatement_->uiStatementLen);
 		if (nErr == 0) {
 			my_ulonglong nAffectedRow = mysql_affected_rows(m_writeConn);
-			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute sql affected=%d, seq=%u, time=%llu, sql=%s\r\n",
+			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute sql affected=%d, seq=%u, time=%llu, sql=%s\n",
 				__FUNCTION__, __LINE__, (int)nAffectedRow, uiLocateSeq_, ulLocateTime_, pSqlStatement_->pStatement);
 			LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 		}
 		else {
 			//backup
+			nErr = mysql_errno(m_locateConn);
 			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]locate conn error=%d, seq=%u, time=%llu, sql=%s\r\n",
-				__FUNCTION__, __LINE__, mysql_errno(m_locateConn), uiLocateSeq_, ulLocateTime_,
-				pSqlStatement_->pStatement);
+				__FUNCTION__, __LINE__, nErr, uiLocateSeq_, ulLocateTime_, pSqlStatement_->pStatement);
 			LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
-			if (nErr == 2006) {
+			if (nErr == 2006 || nErr == 2013) {
 				mysql_close(m_locateConn);
 				m_locateConn = mysql_init(NULL);
 				if (m_locateConn && mysql_real_connect(m_locateConn, m_zkDbProxy.szDbHostIp, m_zkDbProxy.szDbUser,
@@ -1455,13 +1520,13 @@ void DbProxy::handleSqlLocate(dbproxy::SqlStatement * pSqlStatement_, unsigned i
 				if (nErr2 == 0) {
 					my_ulonglong nAffectedRow = mysql_affected_rows(m_writeConn);
 					snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]retry=%d execute sql affected=%d, seq=%u, time=%llu, "
-						"sql=%s\r\n", __FUNCTION__, __LINE__, nRetryTime, (int)nAffectedRow, uiLocateSeq_, ulLocateTime_, 
+						"sql=%s\n", __FUNCTION__, __LINE__, nRetryTime, (int)nAffectedRow, uiLocateSeq_, ulLocateTime_, 
 						pSqlStatement_->pStatement);
 					LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 					break;
 				}
 				snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]retry=%d, locate conn error=%d, %s, seq=%u, time=%llu, "
-					"sql=%s\r\n", __FUNCTION__, __LINE__, nRetryTime, mysql_errno(m_locateConn), mysql_error(m_locateConn),
+					"sql=%s\n", __FUNCTION__, __LINE__, nRetryTime, mysql_errno(m_locateConn), mysql_error(m_locateConn),
 					uiLocateSeq_, ulLocateTime_, pSqlStatement_->pStatement);
 				LOG_Log(m_ullLogInst, szLog,pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 				nRetryTime--;
@@ -3846,6 +3911,9 @@ void DbProxy::dealTopicMsg()
 					}
 					break;
 				}
+				case PUBMSG_ACCOUNT_ALIVE: {
+					break;
+				}
 				default: {
 					sprintf_s(szLog, sizeof(szLog), "[DbProxy]%s[%d]unsupport msg type: %u\r\n", __FUNCTION__, __LINE__,
 						pMsg->uiMsgType);
@@ -4405,11 +4473,10 @@ int DbProxy::handleTopicTaskCloseMsg(TopicTaskCloseMessage * pCloseTaskMsg_, con
 			strncpy_s(szDeviceId, sizeof(szDeviceId), pTask->szDeviceId, strlen(pTask->szDeviceId));
 			strncpy_s(szGuarder, sizeof(szGuarder), pTask->szGuarder, strlen(pTask->szGuarder));
 			makePerson(pTask->szTarget, &person);
-			format_datetime(pCloseTaskMsg_->ulMessageTime, pTask->szTaskStopTime,
-				strlen(pTask->szTaskStopTime));
+			format_datetime(pCloseTaskMsg_->ulMessageTime, pTask->szTaskStopTime, sizeof(pTask->szTaskStopTime));
 			if (strlen(pTask->szHandset)) {
 				nTaskMode = pTask->nTaskMode;
-				strncpy_s(szHandset, sizeof(szHandset), pTask->szHandset, strlen(pTask->szHandset));
+				strcpy_s(szHandset, sizeof(szHandset), pTask->szHandset);
 			}
 		}
 		zhash_delete(g_taskList, pCloseTaskMsg_->szTaskId);
@@ -7613,93 +7680,6 @@ unsigned int DbProxy::getNextPipeSequence()
 	return result;
 }
 
-void DbProxy::initZookeeper()
-{
-	int nTimeout = 30000;
-	if (strlen(m_szZkHost)) {
-		if (!m_zkHandle) {
-			m_zkHandle = zookeeper_init(m_szZkHost, zk_server_watcher, nTimeout, NULL, this, 0);
-		}
-		if (m_zkHandle) {
-			zoo_acreate(m_zkHandle, "/escort", "", 0, &ZOO_OPEN_ACL_UNSAFE, 0, 
-				zk_escort_create_completion, this);
-			zoo_acreate(m_zkHandle, "/escort/dbproxy", "", 1024, &ZOO_OPEN_ACL_UNSAFE, 0,
-				zk_dbproxy_create_completion, this);
-		}
-	}
-}
-
-int DbProxy::competeForMaster()
-{
-	if (m_bZKConnected) {
-		char * path = make_zkpath(2, ESCORT_DBPROXY_PATH, "master");
-		int ret = zoo_acreate(m_zkHandle, path, "", 1024, &ZOO_OPEN_ACL_UNSAFE, ZOO_EPHEMERAL,
-			zk_dbproxy_master_create_completion, this);
-		free(path);
-		return ret;
-	}
-	return -1;
-}
-
-void DbProxy::masterExist()
-{
-	if (m_bZKConnected) {
-		char * path = make_zkpath(2, ESCORT_DBPROXY_PATH, "master");
-		zoo_awexists(m_zkHandle, path, zk_dbproxy_master_exists_watcher, this,
-			zk_dbproxy_master_exists_completion, this);
-		free(path);
-	}
-}
-
-int DbProxy::runAsSlaver()
-{
-	if (m_bZKConnected) {
-		char * path = make_zkpath(2, ESCORT_DBPROXY_PATH, "slaver_");
-		int ret = zoo_acreate(m_zkHandle, path, "", 1024, &ZOO_OPEN_ACL_UNSAFE, ZOO_EPHEMERAL
-			+ ZOO_SEQUENCE, zk_dbproxy_slaver_create_completion, this);
-		free(path);
-		return ret;
-	}
-	return -1;
-}
-
-void DbProxy::removeSlaver()
-{
-	if (m_bZKConnected) {
-		zoo_delete(m_zkHandle, m_zkNodePath, -1);
-		m_zkNodePath[0] = '\0';
-	}
-}
-
-int DbProxy::setZkDbProxyData(const char * pPath_, void * pData_, size_t nDataSize_)
-{
-	if (m_bZKConnected) {
-		char szBuf[1024] = { 0 };
-		memcpy_s(szBuf, 1024, pData_, nDataSize_);
-		int ret = zoo_aset(m_zkHandle, pPath_, szBuf, (int)nDataSize_, -1, zk_dbproxy_set_completion,
-			this);
-		return ret;
-	}
-	return -1;
-}
-
-int DbProxy::getZkMidwareData(const char * pPath_, ZkMidware * pData_)
-{
-	if (m_bZKConnected) {
-		char * path = make_zkpath(2, ESCORT_MIDWARE_PATH, "master");
-		char szBuf[1024] = { 0 };
-		int nBufLen = 1024;
-		Stat stat;
-		int rc = zoo_get(m_zkHandle, path, 0, szBuf, &nBufLen, &stat);
-		if (rc == ZOK) {
-			memcpy_s(pData_, sizeof(ZkMidware), szBuf, sizeof(ZkMidware));
-		}
-		free(path);
-		path = NULL;
-	}
-	return -1;
-}
-
 int DbProxy::sendDataViaInteractor(const char * pData_, size_t nDataLen_)
 {
 	int result = -1;
@@ -7912,8 +7892,9 @@ void DbProxy::updatePipeLoop()
 						}
 					}
 					else {
+						nErr = mysql_errno(m_updateConn);
 						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute OrgList sql update Loop error=%u, %s\n", 
-							__FUNCTION__, __LINE__, mysql_errno(m_updateConn), mysql_error(m_updateConn));
+							__FUNCTION__, __LINE__, nErr, mysql_error(m_updateConn));
 						LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 						if (nErr == 2013 || nErr == 2006) {
 							mysql_close(m_updateConn);
@@ -8024,9 +8005,9 @@ void DbProxy::updatePipeLoop()
 						}
 					}
 					else {
+						nErr = mysql_errno(m_updateConn);
 						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update GuarderList sql at %s failed,"
-							" error=%d:%s\n", __FUNCTION__, __LINE__, szLastUpdateTime, mysql_errno(m_updateConn),
-							mysql_error(m_updateConn));
+							" error=%d:%s\n", __FUNCTION__, __LINE__, szLastUpdateTime, nErr, mysql_error(m_updateConn));
 						LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 						if (nErr == 2013 || nErr == 2006) {
 							mysql_close(m_updateConn);
@@ -8149,9 +8130,9 @@ void DbProxy::updatePipeLoop()
 						}
 					}
 					else {
+						nErr = mysql_errno(m_updateConn);
 						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update DeviceList Sql at %s failed,"
-							" error=%d,%s\n", __FUNCTION__, __LINE__, szLastUpdateTime, mysql_errno(m_updateConn),
-							mysql_error(m_updateConn));
+							" error=%d,%s\n", __FUNCTION__, __LINE__, szLastUpdateTime, nErr, mysql_error(m_updateConn));
 						LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 						if (nErr == 2013 || nErr == 2006) {
 							mysql_close(m_updateConn);
@@ -8258,9 +8239,9 @@ void DbProxy::updatePipeLoop()
 						}
 					}
 					else {
+						nErr = mysql_errno(m_updateConn);
 						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update FenceList sql at %s failed, "
-							"error=%d,%s\n", __FUNCTION__, __LINE__, szLastUpdateTime, mysql_errno(m_updateConn),
-							mysql_error(m_updateConn));
+							"error=%d,%s\n", __FUNCTION__, __LINE__, szLastUpdateTime, nErr, mysql_error(m_updateConn));
 						LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 						if (nErr == 2013 || nErr == 2006) {
 							mysql_close(m_updateConn);
@@ -8333,9 +8314,9 @@ void DbProxy::updatePipeLoop()
 						}
 					}
 					else {
+						nErr = mysql_errno(m_updateConn);
 						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute update task sql at %s failed, "
-							"error=%d, %s\n", __FUNCTION__, __LINE__, szLastUpdateTime, mysql_errno(m_updateConn),
-							mysql_error(m_updateConn));
+							"error=%d, %s\n", __FUNCTION__, __LINE__, szLastUpdateTime, nErr, mysql_error(m_updateConn));
 						LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 						if (nErr == 2013 || nErr == 2006) {
 							mysql_close(m_updateConn);
@@ -8534,7 +8515,7 @@ void DbProxy::closeTaskFromSql(const char * pTaskId, const char * pPersonId, con
 	}
 }
 
-int supervise(zloop_t * loop_, int timer_id_, void * arg_)
+int timerCb(zloop_t * loop_, int timer_id_, void * arg_)
 {
 	int result = 0;
 	DbProxy * pProxy = (DbProxy *)arg_;
@@ -8951,184 +8932,5 @@ void * dealUpdatePipeThread(void * param_)
 	}
 	pthread_exit(NULL);
 	return NULL;
-}
-
-void zk_server_watcher(zhandle_t * zh_, int type_, int state_, const char * path_,
-	void * watcherCtx_)
-{
-	DbProxy * pInst = (DbProxy *)watcherCtx_;
-	if (type_ == ZOO_SESSION_EVENT) {
-		if (state_ == ZOO_CONNECTED_STATE) {
-			if (pInst) {
-				pInst->m_bZKConnected = true;
-			}
-		}
-		else if (state_ == ZOO_EXPIRED_SESSION_STATE) {
-			if (pInst) {
-				pInst->m_bZKConnected = false;
-				zookeeper_close(pInst->m_zkHandle);
-				pInst->m_zkHandle = NULL;
-			}
-		}
-	}
-}
-
-void zk_escort_create_completion(int rc_, const char * name_, const void * data_)
-{
-	DbProxy * pInst = (DbProxy *)data_;
-	switch (rc_) {
-		case ZCONNECTIONLOSS:
-		case ZOPERATIONTIMEOUT: {
-			if (pInst && pInst->m_nRun) {
-				zoo_acreate(pInst->m_zkHandle, "/escort", "", 0, &ZOO_OPEN_ACL_UNSAFE, 0,
-					zk_escort_create_completion, data_);
-			}
-			break;
-		}
-		case ZOK: {
-			fprintf(stdout, "zookeeper create /escort ok\n");
-			break;
-		}
-		case ZNODEEXISTS: {
-			fprintf(stdout, "zookeeper /escort exists\n");
-			break;
-		}
-	}
-}
-
-void zk_dbproxy_create_completion(int rc_, const char * name_, const void * data_)
-{
-	DbProxy * pInst = (DbProxy *)data_;
-	switch (rc_) {
-		case ZCONNECTIONLOSS:
-		case ZOPERATIONTIMEOUT: {
-			if (pInst && pInst->m_nRun) {
-				zoo_acreate(pInst->m_zkHandle, "/escort/dbproxy", "", 1024, &ZOO_OPEN_ACL_UNSAFE, 0,
-					zk_dbproxy_create_completion, data_);
-			}
-			break;
-		}
-		case ZOK: {
-			fprintf(stdout, "zookeeper create /escort/dbproxy ok\n");
-			break;
-		}
-		case ZNODEEXISTS: {
-			fprintf(stdout, "zookeeper /escort/dbproxy exists\n");
-			break;
-		}
-	}
-}
-
-void zk_dbproxy_master_create_completion(int rc_, const char * name_, const void * data_)
-{
-	DbProxy * pInst = (DbProxy *)data_;
-	switch (rc_) {
-		case ZCONNECTIONLOSS:
-		case ZOPERATIONTIMEOUT: {
-			if (pInst && pInst->m_nRun) {
-				pInst->competeForMaster();
-			}
-			break;
-		}
-		case ZOK: {
-			if (pInst) {
-				if (pInst->m_zkDbProxy.usRank == 0 && strlen(pInst->m_zkNodePath)) {
-					pInst->removeSlaver();
-				}
-				size_t nSize = strlen(name_);
-				memcpy_s(pInst->m_zkNodePath, sizeof(pInst->m_zkNodePath), name_, nSize);
-				pInst->m_zkNodePath[nSize] = '\0';
-				pInst->m_zkDbProxy.usRank = 1;
-				pInst->setZkDbProxyData(name_, &pInst->m_zkDbProxy, sizeof(ZkDatabaseProxy));
-			}
-			break;
-		}
-		case ZNODEEXISTS: {
-			if (pInst) {
-				pInst->masterExist();
-				pInst->runAsSlaver();
-			}
-			break;
-		}
-	}
-}
-
-void zk_dbproxy_master_exists_watcher(zhandle_t * zh_, int type_, int state_,
-	const char * path_, void * watcherCtx_)
-{
-	DbProxy * pInst = (DbProxy *)watcherCtx_;
-	if (type_ == ZOO_DELETED_EVENT) {
-		if (pInst) {
-			if (pInst->m_nRun) {
-				pInst->competeForMaster();
-			}
-		}
-	}
-}
-
-void zk_dbproxy_master_exists_completion(int rc_, const Stat * stat_, const void * data_)
-{
-	DbProxy * pInst = (DbProxy *)data_;
-	switch (rc_) {
-		case ZCONNECTIONLOSS: 
-		case ZOPERATIONTIMEOUT: {
-			if (pInst && pInst->m_nRun) {
-				pInst->masterExist();
-			}
-			break;
-		}
-		case ZOK: {
-			break;
-		}
-		case ZNONODE: {
-			if (pInst && pInst->m_nRun) {
-				pInst->competeForMaster();
-			}
-		}
-	}
-}
-
-void zk_dbproxy_slaver_create_completion(int rc_, const char * name_, const void * data_)
-{
-	DbProxy * pInst = (DbProxy *)data_;
-	switch (rc_) {
-		case ZCONNECTIONLOSS:
-		case ZOPERATIONTIMEOUT: {
-			if (pInst && pInst->m_nRun) {
-				pInst->runAsSlaver();
-			}
-			break;
-		}
-		case ZOK: {
-			if (pInst && pInst->m_nRun) {
-				size_t nSize = strlen(name_);
-				memcpy_s(pInst->m_zkNodePath, sizeof(pInst->m_zkNodePath), name_, nSize);
-				pInst->m_zkNodePath[nSize] = '\0';
-				pInst->m_zkDbProxy.usRank = 0;
-				pInst->setZkDbProxyData(name_, &pInst->m_zkDbProxy, sizeof(ZkDatabaseProxy));
-			}
-			break;
-		}
-	}
-}
-
-void zk_dbproxy_set_completion(int rc_, const Stat * stat_ , const void * data_)
-{
-	DbProxy * pInst = (DbProxy *)data_;
-	switch (rc_) {
-		case ZCONNECTIONLOSS:
-		case ZOPERATIONTIMEOUT: {
-			if (pInst && pInst->m_nRun) {
-				pInst->setZkDbProxyData(pInst->m_zkNodePath, &pInst->m_zkDbProxy, sizeof(ZkDatabaseProxy));
-			}
-			break;
-		}
-		case ZOK: {
-			break;
-		}
-		case ZNONODE: {
-			break;
-		}
-	}
 }
 

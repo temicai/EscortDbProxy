@@ -299,7 +299,7 @@ protected:
 	void decryptMessage(unsigned char * pData, unsigned int begin, unsigned int end, unsigned short key);
 	void closeTaskFromSql(const char * pTaskId, const char * pPersonId, const char * pEndTime);
 
-	friend int supervise(zloop_t *, int, void *);
+	friend int timerCb(zloop_t *, int, void *);
 	friend int readSubscriber(zloop_t *, zsock_t * reader_, void *);
 	friend int readPipeline(zloop_t *, zsock_t * reader_, void *);
 	friend int readInteractor(zloop_t *, zsock_t *, void *);
@@ -313,18 +313,6 @@ protected:
 	friend void * dealInteractMsgThread(void *);
 	friend void * superviseThread(void *);
 	friend void * dealUpdatePipeThread(void *);
-
-	friend void zk_server_watcher(zhandle_t *, int, int, const char *, void *);
-	friend void zk_escort_create_completion(int, const char *, const void *);
-	friend void zk_dbproxy_create_completion(int, const char *, const void *);
-	friend void zk_dbproxy_master_create_completion(int, const char *, const void *);
-	friend void zk_dbproxy_master_exists_watcher(zhandle_t *, int, int, const char * , void *);
-	friend void zk_dbproxy_master_exists_completion(int, const Stat *, const void *);
-	friend void zk_dbproxy_slaver_create_completion(int, const char *, const void *);
-	friend void zk_dbproxy_set_completion(int, const Stat *, const void *);
-
-
-
 };
 
 
