@@ -6,6 +6,8 @@
 #include <time.h>
 #include <string>
 #include "mysql.h"
+#include "mysqld_error.h"
+#include "errmsg.h"
 #define _TIMESPEC_DEFINED
 #include "pthread.h"
 #include "czmq.h"
@@ -27,6 +29,11 @@
 #pragma comment(lib, "libzmq.lib")
 #pragma comment(lib, "libczmq.lib")
 #pragma comment(lib, "zookeeper.lib")
+
+#if _DEBUG
+#include "vld.h"
+
+#endif
 
 
 #define SQLTYPE_QUERY 0
@@ -190,6 +197,7 @@ private:
 	static zhash_t * g_orgList;
 	static zhash_t * g_fenceList;
 	static zhash_t * g_fenceTaskList;
+	static zhash_t * g_kitList;
 	static pthread_mutex_t g_mutex4DevList;
 	static pthread_mutex_t g_mutex4GuarderList;
 	static pthread_mutex_t g_mutex4TaskList;
@@ -197,6 +205,7 @@ private:
 	static pthread_mutex_t g_mutex4OrgList;
 	static pthread_mutex_t g_mutex4FenceList;
 	static pthread_mutex_t g_mutex4FenceTaskList;
+	static pthread_mutex_t g_mutex4KitList;
 	static int g_nRefCount;
 	static unsigned int g_uiInteractSequence;
 	static pthread_mutex_t g_mutex4InteractSequence;
@@ -278,14 +287,6 @@ protected:
 	void changeDeviceStatus(unsigned short usNewStatus, unsigned short & usDeviceStatus, int nMode = 0);
 	unsigned int getNextInteractSequence();
 	unsigned int getNextPipeSequence();
-
-	void initZookeeper();
-	int competeForMaster();
-	void masterExist();
-	int runAsSlaver();
-	void removeSlaver();
-	int setZkDbProxyData(const char * pPath, void * pData, size_t nDataSize);
-	int getZkMidwareData(const char * pPath, ZkMidware * pData);
 
 	int sendDataViaInteractor(const char *, size_t);
 	bool initSqlBuffer();

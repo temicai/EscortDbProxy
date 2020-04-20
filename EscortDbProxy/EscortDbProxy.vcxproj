@@ -113,13 +113,13 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;_USRDLL;ESCORTDBPROXY_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>..\..\Escort\include\mysql;..\..\Escort\include\czmq;..\..\Escort\include\escort;..\..\Escort\include\pfLog;..\..\Escort\include\pthread;..\..\Escort\include\rapidjson;..\..\Escort\include\zeromq;..\..\Escort\include\zookeeper;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\Escort\include\mysql;..\..\Escort\include\czmq;..\..\Escort\include\escort;..\..\Escort\include\pfLog;..\..\Escort\include\pthread;..\..\Escort\include\rapidjson;..\..\Escort\include\zeromq;..\..\Escort\include\zookeeper;C:\tools\Visual Leak Detector\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>EscortDbProxy.def</ModuleDefinitionFile>
-      <AdditionalLibraryDirectories>..\..\Escort\lib\x64\debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\..\Escort\lib\x64\debug;C:\tools\Visual Leak Detector\lib\Win64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -169,7 +169,6 @@
     <ClCompile Include="EscortDbProxy.cc" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="EscortDbCommon.h" />
     <ClInclude Include="EscortDbProxy.h" />
     <ClInclude Include="DbProxyConcrete.h" />
     <ClInclude Include="resource.h" />

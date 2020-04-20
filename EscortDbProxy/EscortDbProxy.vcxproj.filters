@@ -29,9 +29,6 @@
     <ClInclude Include="DbProxyConcrete.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="EscortDbCommon.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
