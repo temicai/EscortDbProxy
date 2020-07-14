@@ -1,4 +1,4 @@
-#include "EscortDbProxy.h"
+﻿#include "EscortDbProxy.h"
 #include "DbProxyConcrete.h"
 #include <Windows.h>
 #include <string>
@@ -136,6 +136,7 @@ unsigned long long __stdcall DbProxy_Start(const char * pCfgFileName_)
 			char * pSlaveDbUser = readItem(kvList, "db_slave_user");
 			char * pSlaveDbPasswd = readItem(kvList, "db_slave_passwd");
 			char * pSlaveDbPort = readItem(kvList, "db_slave_port");
+			char* pCheckTableData = readItem(kvList, "loop_check_table");
 			char szZkHost[256] = { 0 };
 			char szMidwareHost[32] = { 0 };
 			unsigned short usMidwarePublishPort = 0;
@@ -153,6 +154,7 @@ unsigned long long __stdcall DbProxy_Start(const char * pCfgFileName_)
 			unsigned short usSlaveDbPort = 0;
 			char szDbMajorSample[32] = { 0 };
 			char szDbLocateSample[32] = { 0 };
+			bool bCheckTableData = true;
 			if (pZkHost) {
 				strncpy_s(szZkHost, sizeof(szZkHost), pZkHost, strlen(pZkHost));
 				free(pZkHost);
@@ -238,7 +240,12 @@ unsigned long long __stdcall DbProxy_Start(const char * pCfgFileName_)
 				free(pSlaveDbPort);
 				pSlaveDbPort = NULL;
 			}
-			DbProxy * pInst = new DbProxy(szZkHost, g_szDllDir);
+			if (pCheckTableData) {
+				if (strtol(pCheckTableData, NULL, 10) == 0) {
+					bCheckTableData = false;
+				}
+			}
+			DbProxy * pInst = new DbProxy(szZkHost, g_szDllDir, bCheckTableData);
 			if (pInst) {
 				if (pInst->Start(szDbProxyHost, usDbProxyQryPort, szMidwareHost, usMidwarePublishPort, usMidwareTalkPort,
 					usMidwareCollectPort, szMasterDbHost, szMasterDbUser, szMasterDbPasswd, usMasterDbPort, 

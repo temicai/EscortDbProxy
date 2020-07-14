@@ -1,4 +1,4 @@
-#ifndef DBPROXYCONCRETE_H
+﻿#ifndef DBPROXYCONCRETE_H
 #define DBPROXYCONCRETE_H
 
 #include <WinSock2.h>
@@ -31,7 +31,7 @@
 #pragma comment(lib, "zookeeper.lib")
 
 #if _DEBUG
-#include "vld.h"
+//#include "vld.h"
 
 #endif
 
@@ -135,7 +135,7 @@ using namespace escort;
 class DbProxy
 {
 public:
-	DbProxy(const char * pZkHost, const char * pRoot);
+	DbProxy(const char* pZkHost, const char* pRoot, bool bCheckTableData = true);
 	~DbProxy();
 	int Start(const char * pHost, unsigned short usReceptPort, const char * pMidwareHost, unsigned short usPublishPort,
 		unsigned short usContactPort, unsigned short usCollectPort, const char * pMasterDbHost, const char * pMasterDbUser,
@@ -245,6 +245,8 @@ private:
 	zloop_t * m_loop;
 	int m_nTimer4Supervise;
 	int m_nTimerTickCount;
+
+	bool m_bLoopCheckTableData;
 	
 protected:
 	void initLog();

@@ -1,4 +1,4 @@
-#include "DbProxyConcrete.h"
+﻿#include "DbProxyConcrete.h"
 
 std::map<std::string, escort::WristletDevice *> DbProxy::g_deviceList;
 zhash_t * DbProxy::g_guarderList = NULL;
@@ -116,7 +116,7 @@ static char * make_zkpath(int num, ...)
 	return path;
 }
 
-DbProxy::DbProxy(const char * pZkHost_, const char * pRoot_)
+DbProxy::DbProxy(const char * pZkHost_, const char * pRoot_, bool bLoopCheckTableData_)
 {
 	srand((unsigned int)time(NULL));
 	m_nRun = 0;
@@ -166,6 +166,8 @@ DbProxy::DbProxy(const char * pZkHost_, const char * pRoot_)
 	pthread_mutex_init(&m_mutex4UpdatePipe, NULL);
 	pthread_cond_init(&m_cond4UpdatePipe, NULL);
 	m_pthdUpdatePipe.p = NULL;
+
+	m_bLoopCheckTableData = bLoopCheckTableData_;
 
 	if (g_nRefCount == 0) {
 		g_bLoadSql = FALSE;
@@ -3484,7 +3486,7 @@ void DbProxy::dealTopicMsg()
 														char szSql[512] = { 0 };
 														if (bFlag) {
 															sprintf_s(szSql, sizeof(szSql), "update user_info set OrgId='%s', Password='%s', "
-																"UserName='%s', RoleType=%d, LastOptTime='%s' where userId='%s';)", pGuarder->szOrg,
+																"UserName='%s', RoleType=%d, LastOptTime='%s' where userId='%s';", pGuarder->szOrg,
 																pGuarder->szPassword, pGuarder->szTagName, pGuarder->usRoleType, szSqlDatetime,
 																pGuarder->szId);
 														}
@@ -8222,6 +8224,7 @@ void DbProxy::updatePipeLoop()
 		pthread_mutex_unlock(&m_mutex4UpdatePipe);
 		if (pTask) {
 			do {
+
 				int nPipeState = getPipeState();
 				if (nPipeState == dbproxy::E_PIPE_OPEN) {
 					char szLastUpdateTime[20] = { 0 };
@@ -8308,7 +8311,7 @@ void DbProxy::updatePipeLoop()
 						snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]execute OrgList sql update Loop error=%u, %s\n", 
 							__FUNCTION__, __LINE__, nErr, mysql_error(m_updateConn));
 						LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
-						if (nErr == 2013 || nErr == 2006) {
+						if (nErr == 2013 || nErr == 2006)  {
 							mysql_close(m_updateConn);
 							m_updateConn = mysql_init(NULL);
 							if (m_updateConn && mysql_real_connect(m_updateConn, m_zkDbProxy.szDbHostIp, m_zkDbProxy.szDbUser,
@@ -8320,7 +8323,6 @@ void DbProxy::updatePipeLoop()
 								mysql_set_character_set(m_updateConn, "gb2312");
 							}
 						}
-						break;
 					}
 
 					char szGuarderSql[256] = { 0 };
@@ -8434,7 +8436,6 @@ void DbProxy::updatePipeLoop()
 								mysql_set_character_set(m_updateConn, "gb2312");
 							}
 						}
-						break;
 					}
 
 					char szDeviceSql[256] = { 0 };
@@ -9132,29 +9133,31 @@ int timerCb(zloop_t * loop_, int timer_id_, void * arg_)
 				pthread_mutex_lock(&DbProxy::g_mutex4UpdateTime);
 				double interval = difftime(now, (time_t)DbProxy::g_ulLastUpdateTime);
 				if (interval >= 30.00/*120.0000*/) {
-					int nState = pProxy->getPipeState();
-					if (nState == dbproxy::E_PIPE_CLOSE) {
-						size_t nTaskSize = sizeof(dbproxy::UpdatePipeTask);
-						dbproxy::UpdatePipeTask * pTask = (dbproxy::UpdatePipeTask *)zmalloc(nTaskSize);
-						pTask->ulUpdateTaskTime = (unsigned long)now;
-						if (!pProxy->addUpdateTask(pTask)) {
-							free(pTask);
-							pTask = NULL;
+					if (pProxy->m_bLoopCheckTableData) {
+						int nState = pProxy->getPipeState();
+						if (nState == dbproxy::E_PIPE_CLOSE) {
+							size_t nTaskSize = sizeof(dbproxy::UpdatePipeTask);
+							dbproxy::UpdatePipeTask* pTask = (dbproxy::UpdatePipeTask*)zmalloc(nTaskSize);
+							pTask->ulUpdateTaskTime = (unsigned long)now;
+							if (!pProxy->addUpdateTask(pTask)) {
+								free(pTask);
+								pTask = NULL;
+							}
+							else {
+								pProxy->setPipeState(dbproxy::E_PIPE_OPEN);
+							}
 						}
-						else {
-							pProxy->setPipeState(dbproxy::E_PIPE_OPEN);
-						}
-					}
-					else if (interval >= 90) {
-						size_t nTaskSize = sizeof(dbproxy::UpdatePipeTask);
-						dbproxy::UpdatePipeTask * pTask = (dbproxy::UpdatePipeTask *)zmalloc(nTaskSize);
-						pTask->ulUpdateTaskTime = (unsigned long)now;
-						if (!pProxy->addUpdateTask(pTask)) {
-							free(pTask);
-							pTask = NULL;
-						}
-						else {
-							pProxy->setPipeState(dbproxy::E_PIPE_OPEN);
+						else if (interval >= 90) {
+							size_t nTaskSize = sizeof(dbproxy::UpdatePipeTask);
+							dbproxy::UpdatePipeTask* pTask = (dbproxy::UpdatePipeTask*)zmalloc(nTaskSize);
+							pTask->ulUpdateTaskTime = (unsigned long)now;
+							if (!pProxy->addUpdateTask(pTask)) {
+								free(pTask);
+								pTask = NULL;
+							}
+							else {
+								pProxy->setPipeState(dbproxy::E_PIPE_OPEN);
+							}
 						}
 					}
 				}
