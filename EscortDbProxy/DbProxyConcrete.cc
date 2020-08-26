@@ -311,6 +311,7 @@ int DbProxy::Start(const char * pHost_, unsigned short usReceptPort_, const char
 	}
 	memset(&m_remoteLink, 0, sizeof(m_remoteLink));
 
+	char szLog[512] = { 0 };
 	int err = 0;
 	m_interactor = zsock_new(ZMQ_DEALER);
 	char szUuid[64] = { 0 };
@@ -432,10 +433,16 @@ int DbProxy::Start(const char * pHost_, unsigned short usReceptPort_, const char
 					g_bLoadSql = TRUE;
 				}
 			}
-			char szLog[256] = { 0 };
-			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]Database proxy start %u\n", __FUNCTION__, __LINE__, usReceptPort_);
+			
+			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]database proxy %s start %u\n", __FUNCTION__, __LINE__, 
+				m_szPipelineIdentity, usReceptPort_);
 			LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_INFO, m_usLogType);
 			return 0;
+		}
+		else {
+			snprintf(szLog, sizeof(szLog), "[DbProxy]%s[%d]dbproxy start error, %d, %d, %d\n",
+				__FUNCTION__, __LINE__, mysql_errno(m_readConn), mysql_errno(m_writeConn), mysql_errno(m_locateConn));
+			LOG_Log(m_ullLogInst, szLog, pf_logger::eLOGCATEGORY_FAULT, m_usLogType);
 		}
 	}
 	if (m_subscriber) {
@@ -982,8 +989,8 @@ void DbProxy::handleSqlQry(const dbproxy::SqlStatement * pSqlStatement_, unsigne
 						int i = 0;
 						while (row = mysql_fetch_row(res_ptr)) {
 							strcpy_s(pSqlTaskList[i].szTaskId, sizeof(pSqlTaskList[i].szTaskId), row[0]);
-							pSqlTaskList[i].usTaskType = (unsigned short)strtol(row[1], NULL, 0);
-							pSqlTaskList[i].usTaskLimit = (unsigned short)strtol(row[2], NULL, 0);
+							pSqlTaskList[i].usTaskType = (unsigned short)strtol(row[1], NULL, 10);
+							pSqlTaskList[i].usTaskLimit = (unsigned short)strtol(row[2], NULL, 10);
 							if (row[3] && strlen(row[3])) {
 								strcpy_s(pSqlTaskList[i].szStartTime, sizeof(pSqlTaskList[i].szStartTime), row[3]);
 							}
@@ -3337,8 +3344,9 @@ void DbProxy::dealTopicMsg()
 
 														if (bFlag) {
 															sprintf_s(szSql, sizeof(szSql), "update device_info set orgId='%s', power=%d, "
-																"factoryId='%s' where deviceId='%s';", device.deviceBasic.szOrgId,
-																device.deviceBasic.nBattery, device.deviceBasic.szFactoryId,
+																"factoryId='%s', lastOptTime='%s' where deviceId='%s';", 
+																device.deviceBasic.szOrgId, device.deviceBasic.nBattery, 
+																device.deviceBasic.szFactoryId, szSqlDatetime,
 																device.deviceBasic.szDeviceId);
 														}
 														else {
@@ -4799,7 +4807,7 @@ int DbProxy::handleTopicTaskModifyMsg(TopicTaskModifyMessage * pModifyMsg_)
 			char szTaskExtraSql1[256] = { 0 };
 			if (strlen(pModifyMsg_->szHandset)) {
 				sprintf_s(szTaskExtraSql1, sizeof(szTaskExtraSql1), "insert into task_extra_info (TaskId, Handset, StartTime) "
-					"value ('%s', '%s', '%s');", pModifyMsg_->szTaskId, pModifyMsg_->szHandset, 
+					"values ('%s', '%s', '%s');", pModifyMsg_->szTaskId, pModifyMsg_->szHandset, 
 					szSqlDateTime);
 				nCount++;
 			}
@@ -4867,37 +4875,40 @@ int DbProxy::handleTopicGpsLocateMsg(TopicLocateMessageGps * pGpsLocateMsg_)
 {
 	int result = -1;
 	if (pGpsLocateMsg_) {
-		pthread_mutex_lock(&g_mutex4DevList);
-		DeviceList::iterator iter = g_deviceList.find(pGpsLocateMsg_->szDeviceId);
-		WristletDevice * pDev = iter->second;
 		char szTaskId[16] = { 0 };
-		char szGuarder[20] =  { 0 };
+		char szGuarder[20] = { 0 };
 		int nFleeFlag = 0;
 		bool bLastest = false;
-		if (pDev) {
-			if (strlen(pDev->szBindGuard)) {
-				strncpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard, strlen(pDev->szBindGuard));
-			}
-			if (pGpsLocateMsg_->nFlag == 1) { //realtime
-				bLastest = true;
-				pDev->ulLastDeviceLocateTime = pGpsLocateMsg_->ulMessageTime;
-				pDev->nLastLocateType = LOCATE_GPS;
-				pDev->deviceBasic.nBattery = pGpsLocateMsg_->usBattery;
-				pDev->devicePosition.dLatitude = pGpsLocateMsg_->dLat;
-				pDev->devicePosition.dLngitude = pGpsLocateMsg_->dLng;
-				pDev->devicePosition.usLatType = pGpsLocateMsg_->usLatType;
-				pDev->devicePosition.usLngType = pGpsLocateMsg_->usLngType;
-				pDev->devicePosition.nCoordinate = pGpsLocateMsg_->nCoordinate;
-				if (pDev->deviceBasic.nBattery >= BATTERY_THRESHOLD) { //normal
-					if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER) {
-						pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
+		pthread_mutex_lock(&g_mutex4DevList);
+		DeviceList::iterator iter = g_deviceList.find(pGpsLocateMsg_->szDeviceId);
+		if (iter != g_deviceList.end()) {
+			WristletDevice* pDev = iter->second;
+			
+			if (pDev) {
+				if (strlen(pDev->szBindGuard)) {
+					strcpy_s(szGuarder, sizeof(szGuarder), pDev->szBindGuard);
+				}
+				if (pGpsLocateMsg_->nFlag == 1) { //realtime
+					bLastest = true;
+					pDev->ulLastDeviceLocateTime = pGpsLocateMsg_->ulMessageTime;
+					pDev->nLastLocateType = LOCATE_GPS;
+					pDev->deviceBasic.nBattery = pGpsLocateMsg_->usBattery;
+					pDev->devicePosition.dLatitude = pGpsLocateMsg_->dLat;
+					pDev->devicePosition.dLngitude = pGpsLocateMsg_->dLng;
+					pDev->devicePosition.usLatType = pGpsLocateMsg_->usLatType;
+					pDev->devicePosition.usLngType = pGpsLocateMsg_->usLngType;
+					pDev->devicePosition.nCoordinate = pGpsLocateMsg_->nCoordinate;
+					if (pDev->deviceBasic.nBattery >= BATTERY_THRESHOLD) { //normal
+						if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == DEV_LOWPOWER) {
+							pDev->deviceBasic.nStatus -= DEV_LOWPOWER;
+						}
+					}
+					else { //lowpower
+						if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == 0) {
+							pDev->deviceBasic.nStatus += DEV_LOWPOWER;
+						}
 					}
 				}
-				else { //lowpower
-					if ((pDev->deviceBasic.nStatus & DEV_LOWPOWER) == 0) {
-						pDev->deviceBasic.nStatus += DEV_LOWPOWER;
-					}
-				}		
 			}
 		}
 		pthread_mutex_unlock(&g_mutex4DevList);
@@ -8224,7 +8235,6 @@ void DbProxy::updatePipeLoop()
 		pthread_mutex_unlock(&m_mutex4UpdatePipe);
 		if (pTask) {
 			do {
-
 				int nPipeState = getPipeState();
 				if (nPipeState == dbproxy::E_PIPE_OPEN) {
 					char szLastUpdateTime[20] = { 0 };
@@ -9163,7 +9173,7 @@ int timerCb(zloop_t * loop_, int timer_id_, void * arg_)
 				}
 				pthread_mutex_unlock(&DbProxy::g_mutex4UpdateTime);
 			}
-			if (pProxy->m_nTimerTickCount % 300 == 0) { //5min
+			if (pProxy->m_nTimerTickCount % 120 == 0) { //2min
 				//keep connection alive
 				char szLog[512] = { 0 };
 				pthread_mutex_lock(&pProxy->m_mutex4LocateConn);

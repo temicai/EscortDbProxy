@@ -69,7 +69,7 @@ namespace dbproxy
 		unsigned int uiTransactionSequence;
 		unsigned int uiSqlCount;
 		SqlStatement * pSqlList;
-		char szTransactionFrom[40];
+		char szTransactionFrom[64];
 		tagSqlTransaction()
 		{
 			uiTransactionSequence = 0;
